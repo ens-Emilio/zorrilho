@@ -1,50 +1,52 @@
-import { clsx } from "clsx";
-import { useSidecar } from "./lib/useSidecar";
+import { useEffect } from "react";
+import { useStore } from "./lib/store";
+import type { TabId } from "./lib/store";
 import ClonarTab from "./components/ClonarTab";
 import EstudioTab from "./components/EstudioTab";
 import ProjetosTab from "./components/ProjetosTab";
 import ConfiguracoesTab from "./components/ConfiguracoesTab";
 
-const TABS = [
+const TABS: { id: TabId; label: string }[] = [
   { id: "clonar", label: "Clonar" },
   { id: "estudio", label: "Estúdio" },
   { id: "projetos", label: "Projetos" },
   { id: "config", label: "Configurações" },
-] as const;
+];
 
 export default function App() {
-  const { selectedTab, setSelectedTab } = useSidecar();
+  const { activeTab, setActiveTab, refresh } = useStore();
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
 
   return (
-    <main className="min-h-screen bg-background text-foreground p-6 max-w-3xl mx-auto">
+    <main className="min-h-screen bg-white text-gray-900 p-6 max-w-3xl mx-auto">
       <header className="mb-6">
         <h1 className="text-2xl font-bold">🦨 Zorrilho</h1>
-        <p className="text-sm text-muted-foreground">
-          Clonagem de voz local — XTTS v2 + HushMic denoising
-        </p>
+        <p className="text-sm text-gray-500">Clonagem de voz local — XTTS v2 + HushMic denoising</p>
       </header>
 
       <nav className="flex space-x-1 mb-6 border-b">
         {TABS.map((tab) => (
           <button
             key={tab.id}
-            onClick={() => setSelectedTab(tab.id)}
-            className={clsx(
-              "px-4 py-2 text-sm font-medium border-b-2 -mb-px",
-              selectedTab === tab.id
+            onClick={() => setActiveTab(tab.id)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${
+              activeTab === tab.id
                 ? "border-blue-600 text-blue-600"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            )}
+                : "border-transparent text-gray-500 hover:text-gray-900"
+            }`}
           >
             {tab.label}
           </button>
         ))}
       </nav>
 
-      {selectedTab === "clonar" && <ClonarTab />}
-      {selectedTab === "estudio" && <EstudioTab />}
-      {selectedTab === "projetos" && <ProjetosTab />}
-      {selectedTab === "config" && <ConfiguracoesTab />}
+      {activeTab === "clonar" && <ClonarTab />}
+      {activeTab === "estudio" && <EstudioTab />}
+      {activeTab === "projetos" && <ProjetosTab />}
+      {activeTab === "config" && <ConfiguracoesTab />}
     </main>
   );
 }

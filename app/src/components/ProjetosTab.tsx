@@ -1,61 +1,67 @@
-import { useSidecar } from "../lib/useSidecar";
-import { generationAudioUrl } from "../lib/sidecar";
+import { useEffect } from "react";
+import { useStore } from "../lib/store";
+import { generationAudioUrl, exportUrl } from "../lib/sidecar";
 
 export default function ProjetosTab() {
-  const { profiles, selectedProfile, setSelectedProfile, generations } = useSidecar();
+  const { profiles, selectedProfile, setSelectedProfile, generations, refreshGenerations, removeProfile } = useStore();
+
+  useEffect(() => {
+    refreshGenerations();
+  }, [selectedProfile, refreshGenerations]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div>
         <h2 className="text-xl font-semibold">Projetos & Histórico</h2>
-        <p className="text-sm text-muted-foreground">
-          Histórico de gerações por perfil de voz.
-        </p>
+        <p className="text-sm text-gray-500">Gerações por perfil de voz.</p>
       </div>
 
-      <div className="border rounded-lg p-4">
-        <div className="mb-4">
-          <label className="block text-sm font-medium mb-2">Perfil</label>
+      <div className="border rounded-lg p-4 space-y-4">
+        <div className="flex space-x-2">
           <select
             value={selectedProfile ?? ""}
             onChange={(e) => setSelectedProfile(e.target.value || null)}
-            className="block w-full px-3 py-2 border rounded"
+            className="flex-1 px-3 py-2 border rounded"
           >
-            <option value=""> — selecionar — </option>
+            <option value="">— selecionar perfil —</option>
             {profiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} ({p.engine})
-              </option>
+              <option key={p.id} value={p.id}>{p.name}</option>
             ))}
           </select>
+          {selectedProfile && (
+            <button
+              onClick={() => { if (confirm("Excluir este perfil e suas referências?")) removeProfile(); }}
+              className="px-3 py-2 bg-red-100 text-red-700 rounded text-sm"
+            >
+              Excluir perfil
+            </button>
+          )}
         </div>
 
-        {selectedProfile && (
-          <div>
-            {generations.length === 0 && (
-              <p className="text-sm text-muted-foreground">Nenhuma geração ainda.</p>
-            )}
-            <ul className="divide-y">
-              {generations.map((g) => (
-                <li key={g.id} className="py-2 space-y-1">
-                  <div className="text-sm font-medium">
-                    {new Date(g.created_at).toLocaleString()} · {g.engine}
-                  </div>
-                  <div className="text-xs text-muted-foreground truncate">
-                    {g.text}
-                  </div>
-                  {g.output_path && (
-                    <audio
-                      controls
-                      src={generationAudioUrl(g.id)}
-                      className="w-full"
-                    />
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
+        {selectedProfile && generations.length === 0 && (
+          <p className="text-sm text-gray-500">Nenhuma geração ainda para este perfil.</p>
         )}
+
+        <ul className="divide-y">
+          {generations.map((g) => (
+            <li key={g.id} className="py-3 space-y-1">
+              <div className="flex justify-between text-sm">
+                <span className="font-medium">
+                  {new Date(g.created_at).toLocaleString()}
+                </span>
+                <span className="text-gray-500">
+                  {g.engine} · {Math.round(g.duration_ms / 100) / 10}s
+                </span>
+              </div>
+              <div className="text-xs text-gray-500 line-clamp-1">{g.text}</div>
+              <audio controls src={generationAudioUrl(g.id)} className="w-full" />
+              <div className="space-x-2">
+                <a href={exportUrl(g.id, "wav")} className="px-2 py-1 bg-gray-200 rounded text-xs">⬇ WAV</a>
+                <a href={exportUrl(g.id, "mp3")} className="px-2 py-1 bg-gray-200 rounded text-xs">⬇ MP3</a>
+              </div>
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   );

@@ -114,3 +114,7 @@ export async function ensureAssets(): Promise<{ status: string; events: unknown[
 export function generationAudioUrl(gid: string): string {
   return `${SIDECAR_URL}/api/generations/${gid}/audio`;
 }
+
+export function exportUrl(gid: string, format: "wav" | "mp3"): string {
+  return `${SIDECAR_URL}/api/generations/${gid}/export?format=${format}`;
+}

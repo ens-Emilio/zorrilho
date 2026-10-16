@@ -216,3 +216,52 @@ def get_audio(gid: str) -> FileResponse:
     if row is None:
         raise HTTPException(404, "generation not found")
     return FileResponse(row.output_path, media_type="audio/wav")
+
+@app.get("/api/generations")
+def list_generations(profile_id: str | None = None) -> list[dict]:
+    with _Session() as s:
+        stmt = (
+            select(GenerationHistory)
+            .where(GenerationHistory.voice_profile_id == profile_id)
+            if profile_id
+            else select(GenerationHistory)
+        )
+        rows = s.scalars(stmt.order_by(GenerationHistory.created_at.desc())).all()
+    return [
+        {
+            "id": r.id,
+            "voice_profile_id": r.voice_profile_id,
+            "text": r.text,
+            "output_path": r.output_path,
+            "engine": r.engine,
+            "duration_ms": r.duration_ms,
+            "created_at": str(r.created_at),
+        }
+        for r in rows
+    ]
+
+
+@app.get("/api/generations/{gid}/export")
+def export_audio(gid: str, format: str = "wav") -> FileResponse:
+    """Exporta a geracao. mp3 via ffmpeg ( requisição :format=mp3 )."""
+    import subprocess
+    import tempfile
+
+    if format not in ("wav", "mp3"):
+        raise HTTPException(422, "format deve ser wav ou mp3")
+    with _Session() as s:
+        row = s.get(GenerationHistory, gid)
+    if row is None or not row.output_path:
+        raise HTTPException(404, "generation not found")
+
+    if format == "wav":
+        return FileResponse(row.output_path, media_type="audio/wav", filename=f"{gid}.wav")
+
+    out_path = Path(row.output_path).with_suffix(".mp3")
+    if not out_path.exists():
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", row.output_path, "-codec:a", "libmp3lame", "-qscale:a", "2", str(out_path)],
+            check=True,
+            capture_output=True,
+        )
+    return FileResponse(out_path, media_type="audio/mpeg", filename=f"{gid}.mp3")
