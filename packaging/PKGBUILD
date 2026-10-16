@@ -1,0 +1,47 @@
+# Maintainer: zens
+# Zorrilho — clonagem de voz local (XTTS v2 + HushMic denoising)
+# Estrategia: binario Tauri + fontes do sidecar; venv torch CUDA criado no
+# primeiro uso pelo wrapper ( evita empacotar 2.5 GB de CUDA no pacman ).
+
+pkgname=zorrilho
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Clonagem de voz local com denoising em tempo real (XTTS v2 + DPDFNet)"
+arch=('x86_64')
+url="https://github.com/zens/zorrilho"
+license=('MIT')
+depends=('ffmpeg' 'webkit2gtk-4.1' 'gtk3')
+makedepends=('rust' 'nodejs' 'npm' 'git')
+optdepends=(
+  'nvidia-utils: driver NVIDIA para inferencia CUDA'
+  'uv: venv rapido no primeiro uso ( fallback: python-pip )'
+  'python: fallback para criacao do venv'
+)
+install=zorrilho.install
+source=("zorrilho::git+https://github.com/zens/zorrilho.git#tag=v${pkgver}")
+sha256sums=('SKIP')
+
+build() {
+  cd "${srcdir}/zorrilho/app"
+  npm ci
+  npm run build
+  cd src-tauri
+  cargo build --release --frozen
+}
+
+package() {
+  cd "${srcdir}/zorrilho"
+
+  # binario tauri
+  install -Dm755 app/src-tauri/target/release/zorrilho "$pkgdir/usr/bin/zorrilho"
+
+  # fontes do sidecar ( venv criado no primeiro uso pelo wrapper )
+  install -dm755 "$pkgdir/opt/zorrilho/sidecar"
+  cp -r sidecar/zorrilho "$pkgdir/opt/zorrilho/sidecar/zorrilho"
+  find "$pkgdir/opt/zorrilho/sidecar" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+
+  # wrapper + desktop
+  install -Dm755 packaging/zorrilho-sidecar "$pkgdir/opt/zorrilho/bin/zorrilho-sidecar"
+  install -Dm644 packaging/zorrilho.desktop "$pkgdir/usr/share/applications/zorrilho.desktop"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/zorrilho/LICENSE" 2>/dev/null || true
+}

@@ -1,0 +1,37 @@
+#!/bin/bash
+# zorrilho-sidecar — wrapper do FastAPI.
+# No primeiro uso cria o venv (~/.local/share/zorrilho/venv) e instala as deps
+# ( torch CUDA ~2.5 GB — demora; progresso vai pro stderr ).
+set -euo pipefail
+
+DATA_DIR="${ZORRILHO_DATA_DIR:-$HOME/.local/share/zorrilho}"
+VENV="$DATA_DIR/venv"
+SIDECAR_SRC=/opt/zorrilho/sidecar
+PY="$VENV/bin/python"
+
+export TTS_HOME="$DATA_DIR/models"
+export COQUI_TOS_AGREED="${COQUI_TOS_AGREED:-1}"
+export PORT="${PORT:-8765}"
+
+mkdir -p "$DATA_DIR"
+
+if [ ! -x "$PY" ]; then
+  echo "==> [zorrilho] primeiro uso: criando venv do sidecar (torch CUDA, pode demorar)..." >&2
+  if command -v uv >/dev/null 2>&1; then
+    uv venv "$VENV" --python 3.11
+    uv pip install --python "$PY" --index-url https://download.pytorch.org/whl/cu128 torch==2.5.0 torchaudio==2.5.0
+    uv pip install --python "$PY" "coqui-tts==0.25.3" "transformers==4.46.1" \
+      "fastapi>=0.115" "uvicorn>=0.32" "sqlalchemy>=2.0" "alembic>=1.13" \
+      "python-multipart>=0.0.9" "soundfile>=0.12" "websockets>=12.0" "dpdfnet==0.5.1"
+  else
+    python3.11 -m venv "$VENV" 2>/dev/null || python -m venv "$VENV"
+    "$PY" pip install --index-url https://download.pytorch.org/whl/cu128 torch==2.5.0 torchaudio==2.5.0
+    "$PY" pip install "coqui-tts==0.25.3" "transformers==4.46.1" \
+      "fastapi>=0.115" "uvicorn>=0.32" "sqlalchemy>=2.0" "alembic>=1.13" \
+      "python-multipart>=0.0.9" "soundfile>=0.12" "websockets>=12.0" "dpdfnet==0.5.1"
+  fi
+  echo "==> [zorrilho] venv pronto." >&2
+fi
+
+cd "$SIDECAR_SRC"
+exec "$PY" -m zorrilho

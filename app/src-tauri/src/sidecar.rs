@@ -1,9 +1,11 @@
-// Spawn/monitor do sidecar FastAPI. Em dev usa `uv run`, em release o binário empacotado.
+// Spawn/monitor do sidecar FastAPI.
+// Dev: `uv run python -m zorrilho` no sidecar/ do repo.
+// Release: binario adjacente ao exe (externalBin) ou /opt/zorrilho/bin (PKGBUILD).
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use parking_lot::Mutex;
 use std::time::Duration;
 
+use parking_lot::Mutex;
 use tauri::AppHandle;
 use tauri::Manager;
 
@@ -11,8 +13,15 @@ static SIDECAR: Mutex<Option<Child>> = Mutex::new(None);
 
 pub const SIDECAR_PORT: u16 = 8765;
 
+fn sidecar_tts_home(app: &AppHandle) -> PathBuf {
+    app.path()
+        .app_data_dir()
+        .map(|d| d.join("models"))
+        .unwrap_or_else(|_| PathBuf::from(".local/share/zorrilho/models"))
+}
+
 fn dev_sidecar_cmd(app: &AppHandle) -> Option<Command> {
-    // sidecar/ fica ao lado de app/ no repo ( dev )
+    // sidecar/ fica dois níveis acima de src-tauri/ no repo
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()?
         .parent()?
@@ -31,21 +40,22 @@ fn dev_sidecar_cmd(app: &AppHandle) -> Option<Command> {
 }
 
 fn release_sidecar_cmd(app: &AppHandle) -> Option<Command> {
+    // 1. binario adjacente ao exe ( externalBin do tauri )
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-    let bin = exe_dir.join("zorrilho-sidecar");
-    if !bin.exists() {
-        return None;
+    let local_bin = exe_dir.join("zorrilho-sidecar");
+    if local_bin.exists() {
+        let mut cmd = Command::new(local_bin);
+        cmd.env("TTS_HOME", sidecar_tts_home(app));
+        return Some(cmd);
     }
-    let mut cmd = Command::new(bin);
-    cmd.env("TTS_HOME", sidecar_tts_home(app));
-    Some(cmd)
-}
-
-fn sidecar_tts_home(app: &AppHandle) -> PathBuf {
-    app.path()
-        .app_data_dir()
-        .map(|d| d.join("models"))
-        .unwrap_or_else(|_| PathBuf::from(".local/share/zorrilho/models"))
+    // 2. instalacao via PKGBUILD ( /opt/zorrilho/bin )
+    let opt_bin = PathBuf::from("/opt/zorrilho/bin/zorrilho-sidecar");
+    if opt_bin.exists() {
+        let mut cmd = Command::new(opt_bin);
+        cmd.env("TTS_HOME", sidecar_tts_home(app));
+        return Some(cmd);
+    }
+    None
 }
 
 pub fn spawn(app: &AppHandle) -> Result<(), String> {
@@ -54,7 +64,7 @@ pub fn spawn(app: &AppHandle) -> Result<(), String> {
         return Ok(()); // ja rodando
     }
     let cmd = dev_sidecar_cmd(app).or_else(|| release_sidecar_cmd(app));
-    let mut cmd = cmd.ok_or("sidecar nao encontrado (dev: sidecar/ ; release: bin ao lado do exe)")?;
+    let mut cmd = cmd.ok_or("sidecar nao encontrado (dev: sidecar/ ; release: bin adjacente ou /opt/zorrilho/bin)")?;
     let child = cmd
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -82,7 +92,6 @@ pub fn wait_healthy(timeout: Duration) -> Result<(), String> {
 
 pub fn shutdown() {
     if let Some(mut child) = SIDECAR.lock().take() {
-        // SIGTERM para shutdown gracial do uvicorn
         let _ = child.kill();
         let _ = child.wait();
     }

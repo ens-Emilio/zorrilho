@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Zorrilho
+Comment=Clonagem de voz local com denoising
+Exec=/usr/bin/zorrilho
+Icon=zorrilho
+Terminal=false
+Categories=AudioVideo;Audio;

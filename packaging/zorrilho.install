@@ -1,0 +1,12 @@
+post_install() {
+  echo "==> Zorrilho instalado."
+  echo "==> No primeiro uso o app baixa automaticamente:"
+  echo "    - XTTS v2 (~1.8 GB) para ~/.local/share/zorrilho/models/"
+  echo "    - Assets DPDFNet (~29 MB) para o mesmo local"
+  echo "==> O modelo XTTS v2 usa a licenca CPML (nao-comercial):"
+  echo "    https://coqui.ai/cpml"
+}
+
+post_upgrade() {
+  post_install
+}
