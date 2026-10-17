@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useStore } from "../lib/store";
-import { generationAudioUrl, exportUrl } from "../lib/sidecar";
+import AudioPlayer from "./AudioPlayer";
 import ZorrilhoIcon from "./ZorrilhoIcon";
 
 export default function ProjetosTab() {
@@ -69,14 +69,7 @@ export default function ProjetosTab() {
                   <span className="meta num">{g.engine} · {Math.round(g.duration_ms / 100) / 10}s</span>
                 </div>
                 <div className="clamp2" style={{ fontSize: 12, lineHeight: 1.5, color: "var(--muted)" }}>{g.text}</div>
-                <audio controls src={generationAudioUrl(g.id)} style={{ width: "100%", height: 28, display: "none" }} />
-                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <audio src={generationAudioUrl(g.id)} controls style={{ flex: 1, height: 28 }} />
-                </div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <a href={exportUrl(g.id, "wav")} className="btn btn-secondary" style={{ flex: 1, textDecoration: "none", height: 24, fontSize: 11 }}>WAV</a>
-                  <a href={exportUrl(g.id, "mp3")} className="btn btn-secondary" style={{ flex: 1, textDecoration: "none", height: 24, fontSize: 11 }}>MP3</a>
-                </div>
+                <AudioPlayer gid={g.id} />
               </div>
             ))}
             {selected && generations.length > 0 && (

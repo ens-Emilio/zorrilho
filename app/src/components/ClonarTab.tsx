@@ -10,7 +10,6 @@ export default function ClonarTab() {
   } = useStore();
 
   const [timer, setTimer] = useState(0);
-  const [capture, setCapture] = useState<"idle" | "recording" | "denoising" | "ready">("idle");
   const [name, setName] = useState("");
   const [denoising, setDenoising] = useState(false);
   const timerRef = useRef<number>(0);
@@ -24,12 +23,8 @@ export default function ClonarTab() {
     return () => { clearInterval(timerRef.current); };
   }, [recording]);
 
-  useEffect(() => {
-    if (refWav && !recording) setCapture("ready");
-    else if (denoising) setCapture("denoising");
-    else if (recording) setCapture("recording");
-    else setCapture("idle");
-  }, [refWav, recording, denoising]);
+  const capture: "idle" | "recording" | "denoising" | "ready" =
+    refWav && !recording ? "ready" : denoising ? "denoising" : recording ? "recording" : "idle";
 
   function fmt(s: number) {
     const m = String(Math.floor(s / 60)).padStart(2, "0");
@@ -45,22 +40,18 @@ export default function ClonarTab() {
         setDenoising(false);
         await invoke("record_start");
         setRecording(true);
-        setCapture("recording");
       } else {
         setDenoising(true);
-        setCapture("denoising");
         const path = await invoke<string>("record_stop");
         const bytes = await invoke<number[]>("read_file", { path });
         setRefWav(new Uint8Array(bytes));
         setRecording(false);
         setDenoising(false);
-        setCapture("ready");
       }
     } catch (e) {
       setError(`Gravação: ${e}`);
       setRecording(false);
       setDenoising(false);
-      setCapture("idle");
     }
   }
 
@@ -127,7 +118,7 @@ export default function ClonarTab() {
                 <span className="meta num" style={{ marginLeft: "auto" }}>{fmt(refWav.length / 48000 / 2)} / {fmt(refWav.length / 48000 / 2)}</span>
               </div>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setRefWav(null); setCapture("idle"); setTimer(0); }}>Descartar / Regravar</button>
+                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setRefWav(null); setTimer(0); }}>Descartar / Regravar</button>
                 <span className="meta" style={{ color: "var(--success)" }}>48kHz · {(refWav.length / 1024).toFixed(1)} KB</span>
               </div>
               {gid && (

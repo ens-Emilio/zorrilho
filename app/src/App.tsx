@@ -29,10 +29,28 @@ export default function App() {
 
   useEffect(() => {
     refresh();
-    const id = setInterval(refresh, 8000);
-    return () => clearInterval(id);
-  }, [refresh]);
-
+    let id: number | undefined;
+    const tick = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    // when healthy, 8s; when offline, 3s; when hidden, paused (via tick guard)
+    const schedule = () => {
+      const delay = health.status === "ok" ? 8000 : 3000;
+      id = window.setTimeout(() => {
+        tick();
+        schedule();
+      }, delay);
+    };
+    schedule();
+    const onVis = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      if (id) clearTimeout(id);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [refresh, health.status]);
   const healthOk = health.status === "ok";
   const healthLabel = healthOk ? "Online" : health.status === "loading" ? "Iniciando motor…" : "Offline";
   const dotClass = healthOk ? "status-dot" : health.status === "loading" ? "status-dot warn" : "status-dot off";

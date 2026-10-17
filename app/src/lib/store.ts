@@ -143,19 +143,35 @@ export const useStore = create<SidecarState>((set, get) => ({
     try {
       const taskId = await generateTask(text, selectedProfile, "pt");
       return await new Promise<string>((resolve, reject) => {
-        const cleanup = watchProgress(taskId, (ev) => {
-          set({ progress: ev });
-          if (ev.stage === "done" && ev.generation_id) {
-            cleanup();
-            set({ lastGenerationId: ev.generation_id, loading: false });
+        let done = false;
+        const finish = (err?: Error, gid?: string) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          cleanup();
+          set({ loading: false });
+          if (err) {
+            set({ error: err.message });
+            reject(err);
+          } else if (gid) {
+            set({ lastGenerationId: gid });
             get().refreshGenerations();
-            resolve(ev.generation_id);
-          } else if (ev.stage === "error") {
-            cleanup();
-            set({ error: ev.error ?? "erro desconhecido", loading: false });
-            reject(new Error(ev.error));
+            resolve(gid);
           }
-        });
+        };
+        const timer = setTimeout(() => finish(new Error("generate timeout (5min)")), 5 * 60 * 1000);
+        const cleanup = watchProgress(
+          taskId,
+          (ev) => {
+            set({ progress: ev });
+            if (ev.stage === "done" && ev.generation_id) {
+              finish(undefined, ev.generation_id);
+            } else if (ev.stage === "error") {
+              finish(new Error(ev.error ?? "erro desconhecido"));
+            }
+          },
+          () => finish(new Error("WS connection error"))
+        );
       });
     } catch (e) {
       set({ error: `Erro ao gerar: ${e}`, loading: false });

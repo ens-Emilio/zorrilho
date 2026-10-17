@@ -1,5 +1,5 @@
 import { useStore } from "../lib/store";
-import { exportUrl } from "../lib/sidecar";
+import { exportUrl, generationAudioUrl } from "../lib/sidecar";
 import ZorrilhoIcon from "./ZorrilhoIcon";
 
 export default function EstudioTab() {
@@ -80,7 +80,7 @@ export default function EstudioTab() {
           <div style={{ flex: 1, minWidth: 0 }} className="meta">Nenhum áudio gerado ainda.</div>
         ) : (
           <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-            <audio src={`${import.meta.env.VITE_SIDECAR_URL ?? "http://localhost:8765"}/api/generations/${gid}/audio`} style={{ display: "none" }} id="estudio-audio" />
+            <audio src={generationAudioUrl(gid)} style={{ display: "none" }} id="estudio-audio" />
             <button
               className="btn btn-secondary btn-square"
               aria-label="Play"

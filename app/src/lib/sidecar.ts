@@ -1,4 +1,4 @@
-// Cliente do sidecar FastAPI ( HTTP + WS ). Porta fixa em dev; no build vem do spawn.
+// Cliente do sidecar FastAPI (HTTP + WS). Porta fixa em dev; no build vem do spawn.
 // In Vite dev (5173) use relative URL -> Vite proxy (vite.config.ts) avoids CORS/ERR_CONNECTION_REFUSED.
 // In Tauri prod or direct dev, fall back to localhost:8765.
 export const SIDECAR_URL = (() => {
@@ -104,12 +104,52 @@ export interface ProgressEvent {
 /** Abre WS de progresso de uma task. onEvent recebe cada evento; retorna cleanup. */
 export function watchProgress(
   taskId: string,
-  onEvent: (ev: ProgressEvent) => void
+  onEvent: (ev: ProgressEvent) => void,
+  onError?: (e: Event) => void
 ): () => void {
-  const wsBase = SIDECAR_URL ? SIDECAR_URL.replace(/^http/, "ws") : `ws://${window.location.host}`;
-  const ws = new WebSocket(`${wsBase}/ws/progress/${taskId}`);
-  ws.onmessage = (ev) => onEvent(JSON.parse(ev.data));
-  return () => ws.close();
+  // Se SIDECAR_URL for vazio (Vite proxy), deriva do location; caso contrário usa o próprio SIDECAR_URL
+  const base = SIDECAR_URL
+    ? SIDECAR_URL.replace(/^http/, "ws")
+    : `ws://${window.location.host}${window.location.port === "5173" ? ":8765" : ""}`;
+  const ws = new WebSocket(`${base}/ws/progress/${taskId}`);
+  let closed = false;
+  const timer = window.setTimeout(() => {
+    if (!closed) {
+      closed = true;
+      ws.close();
+      onEvent({ stage: "error", progress: 0, error: "watchProgress timeout (5min)" });
+    }
+  }, 5 * 60 * 1000);
+
+  ws.onmessage = (ev) => {
+    try {
+      onEvent(JSON.parse(ev.data));
+    } catch {
+      onEvent({ stage: "error", progress: 0, error: "WS parse failed" });
+    }
+  };
+  ws.onerror = (e) => {
+    if (!closed) {
+      closed = true;
+      clearTimeout(timer);
+      onError?.(e);
+      onEvent({ stage: "error", progress: 0, error: "WS connection error" });
+    }
+  };
+  ws.onclose = () => {
+    if (!closed) {
+      closed = true;
+      clearTimeout(timer);
+      onEvent({ stage: "error", progress: 0, error: "WS closed unexpectedly" });
+    }
+  };
+  return () => {
+    if (!closed) {
+      closed = true;
+      clearTimeout(timer);
+      ws.close();
+    }
+  };
 }
 
 export async function ensureAssets(): Promise<{ status: string; events: unknown[] }> {
