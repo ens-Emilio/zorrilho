@@ -73,10 +73,23 @@ export const useStore = create<SidecarState>((set, get) => ({
   refresh: async () => {
     try {
       const health = await fetchHealth();
-      const profiles = await fetchProfiles();
-      set({ health, profiles });
+      // health can throw ERR_CONNECTION_REFUSED while sidecar restarts — don't mask it
+      if (!health || typeof health.status !== "string") throw new Error("health inválido");
+      set({ health, error: null });
+      try {
+        const profiles = await fetchProfiles();
+        set({ profiles });
+      } catch (e) {
+        // profiles é secundário — health já prova que sidecar está vivo
+        console.warn("[zorrilho] fetchProfiles falhou:", e);
+      }
     } catch (e) {
-      set({ error: `Erro ao buscar dados do sidecar: ${e}`, health: { ...get().health, status: "erro" } });
+      const msg = e instanceof Error ? e.message : String(e);
+      const isConnRefused = msg.includes("Failed to fetch") || msg.includes("ERR_CONNECTION_REFUSED") || msg.includes("NetworkError");
+      set({
+        error: isConnRefused ? "Sidecar offline — reiniciando... (porta 8765)" : `Erro ao buscar dados do sidecar: ${msg}`,
+        health: { ...get().health, status: isConnRefused ? "offline" : "erro" },
+      });
     }
   },
 

@@ -1,5 +1,12 @@
 // Cliente do sidecar FastAPI ( HTTP + WS ). Porta fixa em dev; no build vem do spawn.
-export const SIDECAR_URL = import.meta.env.VITE_SIDECAR_URL ?? "http://localhost:8765";
+// In Vite dev (5173) use relative URL -> Vite proxy (vite.config.ts) avoids CORS/ERR_CONNECTION_REFUSED.
+// In Tauri prod or direct dev, fall back to localhost:8765.
+export const SIDECAR_URL = (() => {
+  const env = (import.meta.env as Record<string, string | undefined>).VITE_SIDECAR_URL;
+  if (env) return env;
+  if (typeof window !== "undefined" && window.location.port === "5173") return "";
+  return "http://localhost:8765";
+})();
 
 export interface Profile {
   id: string;
@@ -99,8 +106,8 @@ export function watchProgress(
   taskId: string,
   onEvent: (ev: ProgressEvent) => void
 ): () => void {
-  const wsUrl = SIDECAR_URL.replace(/^http/, "ws");
-  const ws = new WebSocket(`${wsUrl}/ws/progress/${taskId}`);
+  const wsBase = SIDECAR_URL ? SIDECAR_URL.replace(/^http/, "ws") : `ws://${window.location.host}`;
+  const ws = new WebSocket(`${wsBase}/ws/progress/${taskId}`);
   ws.onmessage = (ev) => onEvent(JSON.parse(ev.data));
   return () => ws.close();
 }
