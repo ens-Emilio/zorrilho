@@ -1,6 +1,5 @@
 import { useStore } from "../lib/store";
 import { exportUrl } from "../lib/sidecar";
-import { XMarkIcon } from "@heroicons/react/24/solid";
 
 export default function EstudioTab() {
   const {
@@ -9,76 +8,99 @@ export default function EstudioTab() {
   } = useStore();
 
   const chars = text.length;
-  const estimatedSec = Math.round((chars / 14) * 10) / 10; // ~14 chars/s fala pt
-  const gid = progress?.generation_id;
+  const estimatedSec = Math.round((chars / 14) * 10) / 10;
+  const gid = progress?.generation_id ?? null;
+  const pct = progress ? Math.round(progress.progress) : 0;
+  const generating = loading && !!progress && progress.stage !== "done" && progress.stage !== "error";
+  const canGenerate = !!selectedProfile && !!text.trim() && !loading;
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="text-xl font-semibold">Estúdio</h2>
-        <p className="text-sm text-gray-500">Editor de roteiro — síntese longa com o perfil selecionado.</p>
-      </div>
-
-      <div className="border rounded-lg p-4 space-y-4">
+    <div className="pane-inner pane-pad" style={{ gap: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
         <div>
-          <label className="block text-sm font-medium mb-1">Perfil</label>
+          <p className="eyebrow">Estúdio · XTTS</p>
+          <h1>Roteiro</h1>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <span className="label-mono">Voz</span>
           <select
+            className="select"
+            style={{ minWidth: 200, height: 30 }}
             value={selectedProfile ?? ""}
             onChange={(e) => setSelectedProfile(e.target.value || null)}
-            className="block w-full px-3 py-2 border rounded"
           >
-            <option value="">— selecionar —</option>
+            <option value="">Selecione um perfil</option>
             {profiles.map((p) => (
               <option key={p.id} value={p.id}>{p.name} ({p.engine})</option>
             ))}
           </select>
         </div>
+      </div>
 
-        <div>
-          <div className="flex justify-between mb-1">
-            <label className="text-sm font-medium">Roteiro</label>
-            <span className="text-xs text-gray-500">
-              {chars} chars · ~{estimatedSec}s de áudio
-            </span>
-          </div>
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            rows={10}
-            className="block w-full px-3 py-2 border rounded font-mono text-sm"
-            placeholder="Cole ou digite o roteiro completo aqui..."
-          />
+      <div className="panel" style={{ padding: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span className="label-mono">Roteiro de síntese</span>
+          {generating && <span className="meta num" style={{ padding: "2px 6px", borderRadius: "var(--radius)", background: "var(--elevated)", border: "1px solid var(--border)" }}>Gerando… {pct}%</span>}
         </div>
-
-        <button
-          onClick={() => runGenerate()}
-          disabled={!selectedProfile || !text.trim() || loading}
-          className={`px-4 py-2 rounded text-white ${(!selectedProfile || !text.trim() || loading) ? "bg-gray-400" : "bg-green-600 hover:bg-green-700"}`}
-        >
-          {loading ? "Sintetizando..." : "▶ Sintetizar roteiro"}
-        </button>
-
-        {progress && (
-          <div className="text-sm">{progress.stage} — {Math.round(progress.progress)}%</div>
-        )}
-
-        {gid && (
-          <div className="space-y-2">
-            <audio controls src={`${import.meta.env.VITE_SIDECAR_URL ?? "http://localhost:8765"}/api/generations/${gid}/audio`} className="w-full" />
-            <div className="space-x-2">
-              <a href={exportUrl(gid, "wav")} className="px-3 py-1 bg-gray-200 rounded text-sm">⬇ WAV</a>
-              <a href={exportUrl(gid, "mp3")} className="px-3 py-1 bg-gray-200 rounded text-sm">⬇ MP3</a>
-            </div>
+        <textarea
+          className="textarea"
+          placeholder="Cole o roteiro aqui."
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={8}
+        />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <div className="meta num">{chars} chars · ~{estimatedSec}s · 14.5 c/s</div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span className="meta">PT-BR</span>
+            <button className="btn btn-ghost" style={{ height: 26, padding: "0 8px" }} onClick={() => setText("")}>Limpar</button>
+          </div>
+        </div>
+        {generating && <div className="fill"><i style={{ width: `${pct}%` }} /></div>}
+        {progress && !generating && (
+          <div className="meta num" style={{ color: progress.stage === "error" ? "var(--error)" : "var(--muted)" }}>
+            {progress.stage} — {Math.round(progress.progress)}%{progress.elapsed_s ? ` · ${progress.elapsed_s}s` : ""}
+            {progress.error ? ` · ${progress.error}` : ""}
           </div>
         )}
       </div>
 
-      {error && (
-        <div className="p-3 bg-red-50 border border-red-200 rounded flex items-start space-x-2">
-          <XMarkIcon className="h-5 w-5 text-red-400 flex-shrink-0" />
-          <span className="text-sm">{error}</span>
-        </div>
-      )}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <button className="btn btn-primary" style={{ minWidth: 160 }} disabled={!canGenerate} onClick={() => runGenerate()}>
+          {loading ? `Gerando… ${pct}%` : "Gerar — XTTS"}
+        </button>
+        <span className="meta">{!selectedProfile ? "Selecione uma voz" : !text.trim() ? "Digite um roteiro" : loading ? "XTTS rodando na GPU…" : "Pronto para gerar"}</span>
+        <span className="meta" style={{ marginLeft: "auto" }}>watchProgress persiste ao trocar de aba</span>
+      </div>
+
+      <div className="panel" style={{ padding: "8px 10px", display: "flex", gap: 10, alignItems: "center" }}>
+        <span className="label-mono">Saída</span>
+        {!gid ? (
+          <div style={{ flex: 1, minWidth: 0 }} className="meta">Nenhum áudio gerado ainda.</div>
+        ) : (
+          <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+            <audio src={`${import.meta.env.VITE_SIDECAR_URL ?? "http://localhost:8765"}/api/generations/${gid}/audio`} style={{ display: "none" }} id="estudio-audio" />
+            <button
+              className="btn btn-secondary btn-square"
+              aria-label="Play"
+              onClick={() => {
+                const el = document.getElementById("estudio-audio") as HTMLAudioElement | null;
+                if (!el) return;
+                if (el.paused) el.play();
+                else el.pause();
+              }}
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
+            </button>
+            <div className="audio-track" style={{ width: 160, flex: 1 }}><i style={{ width: gid ? "100%" : "0" }} /></div>
+            <span className="meta num">WAV · 48 kHz</span>
+            <a href={exportUrl(gid, "wav")} className="btn btn-secondary" style={{ textDecoration: "none", height: 28, fontSize: 11 }}>WAV</a>
+            <a href={exportUrl(gid, "mp3")} className="btn btn-secondary" style={{ textDecoration: "none", height: 28, fontSize: 11 }}>MP3</a>
+          </div>
+        )}
+      </div>
+
+      {error && <div style={{ padding: "8px 9px", background: "color-mix(in oklch, var(--error) 10%, var(--surface))", border: "1px solid color-mix(in oklch, var(--error) 30%, var(--border))", borderRadius: "var(--radius)", fontSize: 12, color: "var(--error)" }}>{error}</div>}
     </div>
   );
 }

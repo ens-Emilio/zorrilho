@@ -9,59 +9,86 @@ export default function ProjetosTab() {
     refreshGenerations();
   }, [selectedProfile, refreshGenerations]);
 
+  const selected = profiles.find((p) => p.id === selectedProfile) ?? null;
+
   return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="text-xl font-semibold">Projetos & Histórico</h2>
-        <p className="text-sm text-gray-500">Gerações por perfil de voz.</p>
+    <div className="pane-inner" style={{ padding: 12, gap: 10, display: "flex", flexDirection: "column" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 12 }}>
+        <div>
+          <p className="eyebrow">Biblioteca · local first</p>
+          <h1 style={{ marginTop: 2 }}>Perfis e gerações</h1>
+        </div>
+        <span className="meta num">{profiles.length} perfis</span>
       </div>
 
-      <div className="border rounded-lg p-4 space-y-4">
-        <div className="flex space-x-2">
-          <select
-            value={selectedProfile ?? ""}
-            onChange={(e) => setSelectedProfile(e.target.value || null)}
-            className="flex-1 px-3 py-2 border rounded"
-          >
-            <option value="">— selecionar perfil —</option>
-            {profiles.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
-          {selectedProfile && (
-            <button
-              onClick={() => { if (confirm("Excluir este perfil e suas referências?")) removeProfile(); }}
-              className="px-3 py-2 bg-red-100 text-red-700 rounded text-sm"
-            >
-              Excluir perfil
-            </button>
-          )}
+      <div className="split-pane">
+        <div style={{ display: "flex", flexDirection: "column", minHeight: 0, borderRight: "1px solid var(--border)" }}>
+          <div className="side-head">
+            <span className="label-mono">Perfis</span>
+            <span className="meta num">{profiles.length}</span>
+          </div>
+          <div className="side-list" style={{ flex: 1, overflow: "auto" }}>
+            {profiles.length === 0 ? (
+              <div className="meta" style={{ padding: 14, textAlign: "center", border: "1px dashed var(--border)", borderRadius: "var(--radius)" }}>Nenhum perfil ainda. Grave na aba Clonar.</div>
+            ) : profiles.map((p) => {
+              const active = p.id === selectedProfile;
+              const initials = p.name.slice(0, 2).toUpperCase();
+              return (
+                <button
+                  key={p.id}
+                  className={`profile-row ${active ? "active" : ""}`}
+                  style={{ width: "100%", textAlign: "left", cursor: "default" }}
+                  onClick={() => setSelectedProfile(p.id)}
+                >
+                  <span className="avatar">{initials}</span>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ fontSize: 12, fontWeight: 500, display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</span>
+                    <span className="meta num" style={{ fontSize: 9 }}>{p.engine} · {p.id.slice(0, 8)}</span>
+                  </span>
+                  {active && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />}
+                </button>
+              );
+            })}
+          </div>
         </div>
-
-        {selectedProfile && generations.length === 0 && (
-          <p className="text-sm text-gray-500">Nenhuma geração ainda para este perfil.</p>
-        )}
-
-        <ul className="divide-y">
-          {generations.map((g) => (
-            <li key={g.id} className="py-3 space-y-1">
-              <div className="flex justify-between text-sm">
-                <span className="font-medium">
-                  {new Date(g.created_at).toLocaleString()}
-                </span>
-                <span className="text-gray-500">
-                  {g.engine} · {Math.round(g.duration_ms / 100) / 10}s
-                </span>
+        <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+          <div className="side-head">
+            <span className="label-mono">{selected ? selected.name : "Selecione um perfil"}</span>
+            <span className="meta num">{selected ? `${generations.length} gerações` : "—"}</span>
+          </div>
+          <div style={{ flex: 1, overflow: "auto", padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+            {!selected ? (
+              <div className="meta" style={{ padding: 18, textAlign: "center", border: "1px dashed var(--border)", borderRadius: "var(--radius)" }}>As gerações deste perfil aparecerão aqui.</div>
+            ) : generations.length === 0 ? (
+              <div className="meta" style={{ padding: 18, textAlign: "center", border: "1px dashed var(--border)", borderRadius: "var(--radius)" }}>Nenhuma geração ainda para este perfil.</div>
+            ) : generations.map((g) => (
+              <div key={g.id} className="gen-card">
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                  <span className="meta num" style={{ color: "var(--fg)" }}>{new Date(g.created_at).toLocaleString()}</span>
+                  <span className="meta num">{g.engine} · {Math.round(g.duration_ms / 100) / 10}s</span>
+                </div>
+                <div className="clamp2" style={{ fontSize: 12, lineHeight: 1.5, color: "var(--muted)" }}>{g.text}</div>
+                <audio controls src={generationAudioUrl(g.id)} style={{ width: "100%", height: 28, display: "none" }} />
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <audio src={generationAudioUrl(g.id)} controls style={{ flex: 1, height: 28 }} />
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <a href={exportUrl(g.id, "wav")} className="btn btn-secondary" style={{ flex: 1, textDecoration: "none", height: 24, fontSize: 11 }}>WAV</a>
+                  <a href={exportUrl(g.id, "mp3")} className="btn btn-secondary" style={{ flex: 1, textDecoration: "none", height: 24, fontSize: 11 }}>MP3</a>
+                </div>
               </div>
-              <div className="text-xs text-gray-500 line-clamp-1">{g.text}</div>
-              <audio controls src={generationAudioUrl(g.id)} className="w-full" />
-              <div className="space-x-2">
-                <a href={exportUrl(g.id, "wav")} className="px-2 py-1 bg-gray-200 rounded text-xs">⬇ WAV</a>
-                <a href={exportUrl(g.id, "mp3")} className="px-2 py-1 bg-gray-200 rounded text-xs">⬇ MP3</a>
-              </div>
-            </li>
-          ))}
-        </ul>
+            ))}
+            {selected && generations.length > 0 && (
+              <button
+                className="btn btn-ghost"
+                style={{ marginTop: 4, color: "var(--error)", borderColor: "color-mix(in oklch, var(--error) 30%, var(--border))" }}
+                onClick={() => { if (confirm("Excluir este perfil e suas referências?")) removeProfile(); }}
+              >
+                Excluir perfil
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
