@@ -23,3 +23,10 @@ dist-ssr
 *.sln
 *.sw?
 zorrilho-studio.html
+
+# secrets / env
+.env
+.env.*
+*.pem
+*.key
+*.secret

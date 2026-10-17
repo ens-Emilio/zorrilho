@@ -1,13 +1,89 @@
+# ── deps ──
 node_modules/
+.pnp
+.pnp.js
+
+# ── builds ──
 dist/
 target/
 src-tauri/binaries/
 src-tauri/gen/
-sidecar/.venv/
 sidecar/dist/
-*.db
-*.wav
-.env
-zorrilho-design-system.md
+sidecar/.venv/
+.venv/
+venv/
+env/
+.eggs/
+*.egg-info/
+
+# ── Python ──
 __pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
 *.pyc
+
+# ── Rust ──
+# (app/src-tauri/.gitignore covers /target and /gen)
+
+# ── secrets & env ──
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.*
+credentials*
+*.secret
+
+# ── data & generated audio/db ──
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.wav
+*.mp3
+*.ogg
+*.flac
+
+# ── logs ──
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# ── editors / IDE ──
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.code-workspace
+
+# ── Tauri / Vite ──
+*.local
+dist-ssr/
+
+# ── project-specific ──
+zorrilho-design-system.md
+zorrilho-studio.html
