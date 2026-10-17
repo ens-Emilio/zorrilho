@@ -9,3 +9,5 @@ sidecar/dist/
 *.wav
 .env
 zorrilho-design-system.md
+__pycache__/
+*.pyc

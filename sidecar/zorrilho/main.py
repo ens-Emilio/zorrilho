@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import create_engine, select
@@ -27,6 +28,13 @@ os.environ["TTS_HOME"] = str(DATA_DIR / "models")
 
 app = FastAPI(title="Zorrilho sidecar")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # SQLAlchemy sync ( queries curtas em SQLite; thread pool do FastAPI cobre )
 _engine = create_engine(f"sqlite:///{DB_PATH}", echo=False)
 _Session = sessionmaker(bind=_engine)
