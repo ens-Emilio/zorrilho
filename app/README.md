@@ -1,32 +1,35 @@
-# React + TypeScript + Vite
+# Zorrilho — app (Tauri + React)
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Frontend + shell live in `app/`. The project root docs are authoritative — see [`../README.md`](../README.md) (EN) · [`../README.pt-BR.md`](../README.pt-BR.md) · [`../README.es.md`](../README.es.md).
 
-Currently, two official plugins are available:
+## Dev
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm ci
+npm run build        # tsc -b + vite build
+npx tauri dev        # Vite on 5173 proxies /api → localhost:8765
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## Scripts
+
+| Script | What it does |
+|---|---|
+| `npm run dev` | Vite dev server |
+| `npm run build` | `tsc -b && vite build` → `dist/` |
+| `npm run lint` | `oxlint` |
+| `npm run preview` | `vite preview` |
+| `npx tauri dev` | Tauri shell + Vite (auto-spawns sidecar) |
+| `npx tsc -b --noEmit` | Typecheck only |
+
+## Structure
+
+- `src/` — React (components: `ClonarTab`, `EstudioTab`, `ProjetosTab`, `ConfiguracoesTab`; `lib/store.ts`, `lib/sidecar.ts`)
+- `src-tauri/` — Rust ( `lib.rs`, `sidecar.rs`, `audio/mod.rs` ), Tauri config, `examples/test_audio.rs`
+- `vite.config.ts` — dev proxy for `/api`, `/health`, `/ws` → `127.0.0.1:8765`
+- `public/` + `src/assets/` — `zorrilho.svg`, icons, favicon
+
+## Notes
+
+- The sidecar is **not** bundled; `vite dev` proxies to it, Tauri prod hits `http://localhost:8765` directly.
+- Rust toolchain: `1.90` (see `src-tauri/Cargo.toml` `rust-version`).
+- License: Apache-2.0 (see root `LICENSE`).
