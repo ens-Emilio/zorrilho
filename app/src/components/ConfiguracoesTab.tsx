@@ -1,4 +1,5 @@
 import { useState } from "react";
+import ZorrilhoIcon from "./ZorrilhoIcon";
 import { useStore } from "../lib/store";
 
 export default function ConfiguracoesTab() {
@@ -18,9 +19,7 @@ export default function ConfiguracoesTab() {
 
       <div className="panel" style={{ padding: 12, borderColor: done ? "color-mix(in oklch, var(--success) 30%, var(--border))" : "color-mix(in oklch, var(--warning) 26%, var(--border))" }}>
         <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-          <div style={{ width: 32, height: 32, borderRadius: "var(--radius)", background: "var(--elevated)", border: "1px solid var(--border)", display: "grid", placeItems: "center", color: done ? "var(--success)" : "var(--warning)", flexShrink: 0 }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M12 16v-4" /><path d="M12 8h.01" /><path d="M20 13a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" /></svg>
-          </div>
+          <div style={{ width: 32, height: 32, borderRadius: "var(--radius)", background: "var(--elevated)", border: "1px solid var(--border)", display: "grid", placeItems: "center", overflow: "hidden", flexShrink: 0 }}><ZorrilhoIcon size={32} /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <h3>Instalação inicial — ~2,0 GB</h3>
             <p className="meta" style={{ margin: "2px 0 8px" }}>XTTS v2 + DPDFNet + vocoder. Download único, verifica SHA256 e fica offline.</p>

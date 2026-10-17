@@ -1,5 +1,6 @@
 import { useStore } from "../lib/store";
 import { exportUrl } from "../lib/sidecar";
+import ZorrilhoIcon from "./ZorrilhoIcon";
 
 export default function EstudioTab() {
   const {
@@ -70,7 +71,7 @@ export default function EstudioTab() {
           {loading ? `Gerando… ${pct}%` : "Gerar — XTTS"}
         </button>
         <span className="meta">{!selectedProfile ? "Selecione uma voz" : !text.trim() ? "Digite um roteiro" : loading ? "XTTS rodando na GPU…" : "Pronto para gerar"}</span>
-        <span className="meta" style={{ marginLeft: "auto" }}>watchProgress persiste ao trocar de aba</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, marginLeft: "auto" }}><ZorrilhoIcon size={18} style={{ opacity: 0.7 }} /><span className="meta">watchProgress persiste ao trocar de aba</span></span>
       </div>
 
       <div className="panel" style={{ padding: "8px 10px", display: "flex", gap: 10, alignItems: "center" }}>

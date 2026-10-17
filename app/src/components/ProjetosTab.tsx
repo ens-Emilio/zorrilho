@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useStore } from "../lib/store";
 import { generationAudioUrl, exportUrl } from "../lib/sidecar";
+import ZorrilhoIcon from "./ZorrilhoIcon";
 
 export default function ProjetosTab() {
   const { profiles, selectedProfile, setSelectedProfile, generations, refreshGenerations, removeProfile } = useStore();
@@ -29,7 +30,7 @@ export default function ProjetosTab() {
           </div>
           <div className="side-list" style={{ flex: 1, overflow: "auto" }}>
             {profiles.length === 0 ? (
-              <div className="meta" style={{ padding: 14, textAlign: "center", border: "1px dashed var(--border)", borderRadius: "var(--radius)" }}>Nenhum perfil ainda. Grave na aba Clonar.</div>
+              <div className="meta" style={{ padding: 18, textAlign: "center", border: "1px dashed var(--border)", borderRadius: "var(--radius)", display: "grid", placeItems: "center", gap: 8 }}><ZorrilhoIcon size={42} style={{ opacity: 0.85 }} /><span>Nenhum perfil ainda. Grave na aba Clonar.</span></div>
             ) : profiles.map((p) => {
               const active = p.id === selectedProfile;
               const initials = p.name.slice(0, 2).toUpperCase();
@@ -58,9 +59,9 @@ export default function ProjetosTab() {
           </div>
           <div style={{ flex: 1, overflow: "auto", padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
             {!selected ? (
-              <div className="meta" style={{ padding: 18, textAlign: "center", border: "1px dashed var(--border)", borderRadius: "var(--radius)" }}>As gerações deste perfil aparecerão aqui.</div>
+              <div className="meta" style={{ padding: 18, textAlign: "center", border: "1px dashed var(--border)", borderRadius: "var(--radius)", display: "grid", placeItems: "center", gap: 8 }}><ZorrilhoIcon size={40} style={{ opacity: 0.12 }} /><span>As gerações deste perfil aparecerão aqui.</span></div>
             ) : generations.length === 0 ? (
-              <div className="meta" style={{ padding: 18, textAlign: "center", border: "1px dashed var(--border)", borderRadius: "var(--radius)" }}>Nenhuma geração ainda para este perfil.</div>
+              <div className="meta" style={{ padding: 18, textAlign: "center", border: "1px dashed var(--border)", borderRadius: "var(--radius)", display: "grid", placeItems: "center", gap: 8 }}><ZorrilhoIcon size={40} style={{ opacity: 0.12 }} /><span>Nenhuma geração ainda para este perfil.</span></div>
             ) : generations.map((g) => (
               <div key={g.id} className="gen-card">
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>

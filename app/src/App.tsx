@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import ZorrilhoIcon from "./components/ZorrilhoIcon";
 import { useStore } from "./lib/store";
 import type { TabId } from "./lib/store";
 import ClonarTab from "./components/ClonarTab";
@@ -50,7 +51,7 @@ export default function App() {
 
       <header className="header">
         <div className="brand">
-          <div className="brand-mark">Z·</div>
+          <div className="brand-mark" aria-hidden><ZorrilhoIcon size={28} /></div>
           <div className="brand-text">
             <strong>Zorrilho</strong>
             <span>XTTS + DPDFNet · offline</span>

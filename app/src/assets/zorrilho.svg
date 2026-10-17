@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Orelhas Arredondadas (Borda branca característica e interior escuro) -->
+  <circle cx="15" cy="22" r="8.5" fill="#F4F4F6" />
+  <circle cx="15" cy="22.5" r="5.5" fill="#09090B" />
+  <circle cx="49" cy="22" r="8.5" fill="#F4F4F6" />
+  <circle cx="49" cy="22.5" r="5.5" fill="#09090B" />
+
+  <!-- Pelagem Branca Superior e Lateral (Topo da cabeça e nuca) -->
+  <path d="M13 26C13 13 21 8 32 8C43 8 51 13 51 26C54 32 54 40 49 45C45 43 42 39 40 35H24C22 39 19 43 15 45C10 40 10 32 13 26Z" fill="#F4F4F6" />
+
+  <!-- Divisão das Listras no Topo da Cabeça -->
+  <path d="M24 9.5C23 14 24 18 26 21M40 9.5C41 14 40 18 38 21" stroke="#A1A1AA" stroke-width="2" stroke-linecap="round" />
+
+  <!-- Máscara Escura do Rosto -->
+  <path d="M17 25C17 16 23 13 32 13C41 13 47 16 47 25C47 35 40 46 36.5 52.5C34.5 56 29.5 56 27.5 52.5C24 46 17 35 17 25Z" fill="#09090B" stroke="#272730" stroke-width="1" />
+
+  <!-- Faixas Brancas das Bochechas -->
+  <path d="M16.5 29C19.5 27 23.5 29 24.5 32.5C24.5 36.5 20.5 40.5 14.5 39.5C13 35.5 14.5 31 16.5 29Z" fill="#F4F4F6" />
+  <path d="M47.5 29C44.5 27 40.5 29 39.5 32.5C39.5 36.5 43.5 40.5 49.5 39.5C51 35.5 49.5 31 47.5 29Z" fill="#F4F4F6" />
+
+  <!-- Mancha Branca Central na Testa -->
+  <path d="M32 17.5C33.8 21.5 35 24 35 26.5C35 28.5 33.7 30 32 30C30.3 30 29 28.5 29 26.5C29 24 30.2 21.5 32 17.5Z" fill="#F4F4F6" />
+
+  <!-- Volume Sutil da Ponte do Focinho -->
+  <path d="M32 31L35.5 45H28.5L32 31Z" fill="#18181B" />
+
+  <!-- Olhos -->
+  <circle cx="24.5" cy="35.5" r="2.8" fill="#18181B" stroke="#272730" stroke-width="0.8" />
+  <circle cx="25.2" cy="34.8" r="1.1" fill="#F4F4F6" />
+  <circle cx="39.5" cy="35.5" r="2.8" fill="#18181B" stroke="#272730" stroke-width="0.8" />
+  <circle cx="38.8" cy="34.8" r="1.1" fill="#F4F4F6" />
+
+  <!-- Focinho (Destaque em Amora #8B5CF6) -->
+  <path d="M28.5 47C28.5 45.8 35.5 45.8 35.5 47L33.8 50.5C33 51.8 31 51.8 30.2 50.5L28.5 47Z" fill="#8B5CF6" />
+</svg>
