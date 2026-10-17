@@ -1,5 +1,5 @@
 // Spawn/monitor do sidecar FastAPI.
-// Dev: `uv run python -m zorrilho` no sidecar/ do repo.
+// Dev: `uv run python -m zorrilho` no sidecar/ do repo (fallback: python -m zorrilho).
 // Release: binario adjacente ao exe (externalBin) ou /opt/zorrilho/bin (PKGBUILD).
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -14,10 +14,14 @@ static SIDECAR: Mutex<Option<Child>> = Mutex::new(None);
 pub const SIDECAR_PORT: u16 = 8765;
 
 fn sidecar_tts_home(app: &AppHandle) -> PathBuf {
-    app.path()
-        .app_data_dir()
-        .map(|d| d.join("models"))
-        .unwrap_or_else(|_| PathBuf::from(".local/share/zorrilho/models"))
+    // app_data_dir() -> Result; fallback uses dirs crate (Option) -> handle separately
+    if let Ok(dir) = app.path().app_data_dir() {
+        return dir.join("models");
+    }
+    if let Some(dir) = dirs::data_dir() {
+        return dir.join("zorrilho/models");
+    }
+    PathBuf::from("/tmp/zorrilho-models")
 }
 
 fn dev_sidecar_cmd(app: &AppHandle) -> Option<Command> {
@@ -29,18 +33,28 @@ fn dev_sidecar_cmd(app: &AppHandle) -> Option<Command> {
     if !repo_root.exists() {
         return None;
     }
-    let mut cmd = Command::new("uv");
-    cmd.arg("run")
-        .arg("python")
-        .arg("-m")
+    let tts_home = sidecar_tts_home(app);
+    // tenta `uv run`, fallback `python -m zorrilho`
+    if which::which("uv").is_ok() {
+        let mut cmd = Command::new("uv");
+        cmd.arg("run")
+            .arg("python")
+            .arg("-m")
+            .arg("zorrilho")
+            .current_dir(repo_root)
+            .env("TTS_HOME", tts_home);
+        return Some(cmd);
+    }
+    // fallback direto
+    let mut cmd = Command::new("python");
+    cmd.arg("-m")
         .arg("zorrilho")
         .current_dir(repo_root)
-        .env("TTS_HOME", sidecar_tts_home(app));
+        .env("TTS_HOME", tts_home);
     Some(cmd)
 }
 
 fn release_sidecar_cmd(app: &AppHandle) -> Option<Command> {
-    // 1. binario adjacente ao exe ( externalBin do tauri )
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
     let local_bin = exe_dir.join("zorrilho-sidecar");
     if local_bin.exists() {
@@ -48,7 +62,6 @@ fn release_sidecar_cmd(app: &AppHandle) -> Option<Command> {
         cmd.env("TTS_HOME", sidecar_tts_home(app));
         return Some(cmd);
     }
-    // 2. instalacao via PKGBUILD ( /opt/zorrilho/bin )
     let opt_bin = PathBuf::from("/opt/zorrilho/bin/zorrilho-sidecar");
     if opt_bin.exists() {
         let mut cmd = Command::new(opt_bin);
@@ -77,16 +90,19 @@ pub fn spawn(app: &AppHandle) -> Result<(), String> {
 pub fn wait_healthy(timeout: Duration) -> Result<(), String> {
     let url = format!("http://127.0.0.1:{SIDECAR_PORT}/health");
     let deadline = std::time::Instant::now() + timeout;
+    let mut backoff = Duration::from_millis(200);
+    let max_backoff = Duration::from_millis(1500);
     loop {
-        if let Ok(resp) = reqwest::blocking::get(&url) {
-            if resp.status().is_success() {
-                return Ok(());
-            }
+        match reqwest::blocking::get(&url) {
+            Ok(resp) if resp.status().is_success() => return Ok(()),
+            Ok(_) => {}
+            Err(_) => {}
         }
         if std::time::Instant::now() > deadline {
             return Err("sidecar nao respondeu /health a tempo".into());
         }
-        std::thread::sleep(Duration::from_millis(300));
+        std::thread::sleep(backoff);
+        backoff = std::cmp::min(backoff.saturating_mul(2), max_backoff);
     }
 }
 

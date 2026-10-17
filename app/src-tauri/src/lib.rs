@@ -1,7 +1,7 @@
 mod audio;
 mod sidecar;
 
-use tauri::Manager;
+
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -20,8 +20,10 @@ pub fn run() {
             .build(),
         )?;
       }
-      // garante diretorios de dados
-      if let Some(data_dir) = dirs::data_dir() {
+      // garante diretorios de dados — respeita ZORRILHO_DATA_DIR se definido
+      if let Ok(root) = std::env::var("ZORRILHO_DATA_DIR") {
+          let _ = std::fs::create_dir_all(std::path::Path::new(&root).join("models/hushmic"));
+      } else if let Some(data_dir) = dirs::data_dir() {
           let model_dir = data_dir.join("zorrilho/models/hushmic");
           std::fs::create_dir_all(&model_dir).ok();
       }
@@ -39,12 +41,11 @@ pub fn run() {
       });
       Ok(())
     })
-    .on_window_event(|window, event| {
-        // shutdown do sidecar ao fechar a janela principal
-        if let tauri::WindowEvent::Destroyed = event {
+    .build(tauri::generate_context!())
+    .expect("error while building tauri application")
+    .run(|_handle, event| {
+        if let tauri::RunEvent::ExitRequested { .. } = event {
             sidecar::shutdown();
         }
-    })
-    .run(tauri::generate_context!())
-    .expect("error while building tauri application");
+    });
 }
