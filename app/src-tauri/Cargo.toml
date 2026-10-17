@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Clonagem de voz local com denoising HushMic"
 authors = ["zens"]
 license = "Apache-2.0"
-repository = ""
+repository = "https://github.com/ens-Emilio/zorrilho"
 edition = "2024"
 rust-version = "1.90"
 

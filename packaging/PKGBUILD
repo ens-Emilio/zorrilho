@@ -8,7 +8,7 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc="Clonagem de voz local com denoising em tempo real (XTTS v2 + DPDFNet)"
 arch=('x86_64')
-url="https://github.com/zens/zorrilho"
+url="https://github.com/ens-Emilio/zorrilho"
 license=('Apache')
 depends=('ffmpeg' 'webkit2gtk-4.1' 'gtk3')
 makedepends=('rust' 'nodejs' 'npm' 'git')
@@ -18,7 +18,7 @@ optdepends=(
   'python: fallback para criacao do venv'
 )
 install=zorrilho.install
-source=("zorrilho::git+https://github.com/zens/zorrilho.git#tag=v${pkgver}")
+source=("zorrilho::git+https://github.com/ens-Emilio/zorrilho.git#tag=v${pkgver}")
 sha256sums=('SKIP')
 
 build() {
