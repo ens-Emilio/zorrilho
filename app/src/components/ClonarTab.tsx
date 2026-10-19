@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../lib/store";
-import { exportUrl, preprocess } from "../lib/sidecar";
+import { exportUrl, preprocess, finetuneVoice } from "../lib/sidecar";
 import { invoke } from "@tauri-apps/api/core";
 
 export default function ClonarTab() {
@@ -8,6 +8,7 @@ export default function ClonarTab() {
     recording, setRecording, refWav, setRefWav, setRefFileName, refFileName,
     profiles: _unused, setError, newProfile, error,
   } = useStore();
+  const selectedEngine = useStore(s=> (s as any).selectedEngine ?? "xtts_v2");
   const [timer, setTimer] = useState(0);
   const [name, setName] = useState("");
   const [denoising, setDenoising] = useState(false);
@@ -78,6 +79,7 @@ export default function ClonarTab() {
         setRefWav(buf);
         setRefFileName(list[0].name);
         setRefFiles(null);
+        if (!cleanEnabled) { setPreSegments(null); return; }
         setPreLoading(true);
         preprocess([{bytes: buf, filename: list[0].name}]).then(r=>{
           setPreSegments(r.segments);
@@ -94,6 +96,7 @@ export default function ClonarTab() {
         setRefWav(arr[0].bytes);
         setRefFileName(`${list.length} arquivos`);
         // async preview (não bloqueia)
+        if (!cleanEnabled) { setPreSegments(null); return; }
         setPreLoading(true);
         preprocess(arr).then(r=>{
           setPreSegments(r.segments);
@@ -131,6 +134,7 @@ export default function ClonarTab() {
   const [preSegments, setPreSegments] = useState<any[]|null>(null);
   const [preChoice, setPreChoice] = useState<Record<number,"clean"|"original">>({});
   const [preLoading, setPreLoading] = useState(false);
+  const [cleanEnabled, setCleanEnabled] = useState(true);
   const canCreate = name.trim().length >= 2 && !!refWav && !recording && !denoising && !loading;
   const createLabel = loading ? "Clonando..." : !refWav ? "Criar perfil — grave ou importe primeiro" : name.trim().length < 2 ? "Criar perfil — nome com ≥2 caracteres" : "✓ Clonar voz";
 
@@ -165,8 +169,20 @@ export default function ClonarTab() {
     }, 300);
   }
 
+  const step = !refWav ? 1 : !name.trim() || name.trim().length < 2 ? 2 : 3;
+
   return (
     <div className="pane-inner pane-pad" style={{ gap: 12 }}>
+      <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",padding:"6px 8px",borderRadius:"var(--radius)",background:"var(--elevated)",border:"1px solid var(--border)"}}>
+        {([ [1,"Áudio"], [2,"Motor+Nome"], [3,"Clonar"]] as [number,string][]).map(([n,label])=> (
+          <span key={n} style={{display:"flex",alignItems:"center",gap:6,opacity: step>=n?1:0.45}}>
+            <span style={{width:18,height:18,borderRadius:"50%",display:"grid",placeItems:"center",fontSize:9,fontFamily:"var(--font-mono)",background: step>=n ? "var(--accent)" : "var(--border)", color:"#fff"}}>{n}</span>
+            <span className="meta" style={{fontSize:10, color: step>=n ? "var(--fg)" : "var(--muted)"}}>{label}</span>
+            {n<3 && <span style={{width:12,height:1,background:"var(--border)"}}/>}
+          </span>
+        ))}
+        <span className="meta" style={{marginLeft:"auto",fontSize:10}}>{step===1 ? "Grave ou importe" : step===2 ? "Escolha motor + nome" : "Pronto para clonar →"}</span>
+      </div>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
         <div>
           <p className="eyebrow">HushMic · captura</p>
@@ -244,6 +260,7 @@ export default function ClonarTab() {
             </div>
           )}
 
+          <label style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}><input type="checkbox" checked={cleanEnabled} onChange={e=>{setCleanEnabled(e.target.checked); if(!e.target.checked) setPreSegments(null);}} /> Limpeza automática (DP DFNet · trim · loudnorm)</label>
           {preLoading && <div className="meta" style={{color:"var(--warning)"}}>Analisando e limpando áudio (DPDFNet)...</div>}
           {preSegments && preSegments.length>0 && (
             <div style={{display:"flex",flexDirection:"column",gap:8,padding:"10px",borderRadius:"var(--radius)",background:"var(--surface)",border:"1px solid var(--border)"}}>
@@ -252,7 +269,7 @@ export default function ClonarTab() {
                 <div key={s.idx} style={{display:"flex",flexDirection:"column",gap:6,padding:"8px",borderRadius:"var(--radius)",background:"var(--elevated)",border:"1px solid var(--border)"}}>
                   <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",alignItems:"center"}}>
                     <span className="meta" style={{fontWeight:600}}>{s.filename}</span>
-                    <span className="meta" style={{fontSize:10}}>{s.duration_raw}s → {s.duration_clean}s · SNR {s.snr_raw}dB → {s.snr_clean}dB {s.did_denoise? "· DPDFNet": ""}</span>
+                    <span className="meta" style={{fontSize:10, color: (s.snr_clean ?? 0) > (s.snr_raw ?? 0) ? "var(--success)" : "var(--muted)"}}>{s.duration_raw}s → {s.duration_clean}s · SNR {s.snr_raw}dB → {s.snr_clean}dB {s.did_denoise? "· DPDFNet": s.did_denoise===false? "· já limpo": ""} · clip {s.clipping_raw} → {s.clipping_clean}</span>
                   </div>
                   <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                     <label style={{display:"flex",alignItems:"center",gap:4,fontSize:12}}><input type="radio" checked={preChoice[s.idx]==="original"} onChange={()=>setPreChoice({...preChoice,[s.idx]:"original"})} /> Original</label>
@@ -275,8 +292,18 @@ export default function ClonarTab() {
             <div className="meta" style={{ marginTop: 4 }}>draftProfileName controlado no store. Botão bloqueia até nome + áudio ready.</div>
           </div>
 
+                    <div className="field">
+            <label htmlFor="engine">Motor — Passo 2</label>
+            <select className="input" id="engine" value={selectedEngine} onChange={e=>useStore.getState().setSelectedEngine(e.target.value)}>
+              <option value="xtts_v2">XTTS v2 — rápido, zero-shot (default)</option>
+              <option value="f5_tts">F5-TTS — prosódia pt-BR (pip install f5-tts)</option>
+              <option value="gpt_sovits">GPT-SoVITS v3 — finetune (requer treino)</option>
+            </select>
+            <span className="meta" style={{fontSize:10}}>{selectedEngine==="f5_tts" ? "pip install f5-tts" : selectedEngine==="gpt_sovits" ? "Stub — use xtts_v2/f5_tts" : "Offline sem deps extras"}</span>
+          </div>
+
           <div className="field">
-            <label htmlFor="profileName">Nome do perfil</label>
+            <label htmlFor="profileName">Nome do perfil — Passo 3</label>
             <input className="input" id="profileName" placeholder="Ex: Ana — comercial" autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} />
             <span className="meta">{name.trim().length >= 2 ? "✓ pronto para criar" : name.length ? `${name.trim().length}/2 — continue` : "Mín. 2 caracteres"}</span>
           </div>
@@ -306,10 +333,8 @@ export default function ClonarTab() {
               <span className="meta" style={{fontSize:11}}>Para voz 95% idêntica, treine finetune GPT-SoVITS (precisa 60s-10min de áudio limpo + GPU).</span>
               <button className="btn btn-secondary" style={{fontSize:12}} onClick={async()=>{
                 try {
-                  const r = await fetch(`${(await import("../lib/sidecar")).SIDECAR_URL}/api/voices/${justCreated.id}/finetune`, {method:"POST"});
-                  const j = await r.json();
-                  if(!r.ok) throw new Error(j.detail || JSON.stringify(j));
-                  alert(`Treino iniciado: ${j.job_id}. Acompanhe na aba Estúdio / Projetos.`);
+                  const j = await finetuneVoice(justCreated.id);
+                  alert(`Treino iniciado: ${j.job_id}. Acompanhe em Projetos (WS progresso).`);
                 } catch(e:any){ alert(`Finetune: ${e.message}`); }
               }}>Treinar finetune (60s+ limpo)</button>
             </div>

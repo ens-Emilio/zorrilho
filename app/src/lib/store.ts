@@ -25,6 +25,7 @@ interface SidecarState {
   refWav: Uint8Array | null;
   refFileName: string | null;
   refFiles: { bytes: Uint8Array; filename: string }[] | null;
+  selectedEngine: string;
   progress: ProgressEvent | null;
   assetsProgress: { done: number; total: number; file: string } | null;
   loading: boolean;
@@ -41,6 +42,7 @@ interface SidecarState {
   setRefWav: (w: Uint8Array | null) => void;
   setRefFileName: (n: string | null) => void;
   setRefFiles: (f: { bytes: Uint8Array; filename: string }[] | null) => void;
+  setSelectedEngine: (e: string) => void;
   setError: (e: string | null) => void;
 
   refresh: () => Promise<void>;
@@ -61,6 +63,7 @@ export const useStore = create<SidecarState>((set, get) => ({
   refWav: null,
   refFileName: null,
   refFiles: null,
+  selectedEngine: "xtts_v2",
   progress: null,
   assetsProgress: null,
   loading: false,
@@ -77,6 +80,7 @@ export const useStore = create<SidecarState>((set, get) => ({
   setRefWav: (w) => set({ refWav: w }),
   setRefFileName: (n) => set({ refFileName: n }),
   setRefFiles: (f) => set({ refFiles: f }),
+  setSelectedEngine: (e) => set({ selectedEngine: e }),
   setError: (e) => set({ error: e }),
   refresh: async () => {
     try {
