@@ -4,7 +4,7 @@
 export const SIDECAR_URL = (() => {
   const env = (import.meta.env as Record<string, string | undefined>).VITE_SIDECAR_URL;
   if (env) return env;
-  if (typeof window !== "undefined" && window.location.port === "5173") return "";
+  if (typeof window !== "undefined" && window.location.port === "5178") return "";
   return "http://localhost:8765";
 })();
 
