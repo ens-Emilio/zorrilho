@@ -16,5 +16,5 @@ HF_DIR = DATA_DIR / "hf"
 # Sidecar port (env overrides config)
 PORT = int(os.environ.get("PORT", "8765"))
 
-# Max ref upload (20 MiB)
-MAX_REF_BYTES = 20 * 1024 * 1024
+# Max ref upload — efetivamente sem limite de GB (limite real é duração 5min no handler)
+MAX_REF_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB guarda-chuva pra não OOM

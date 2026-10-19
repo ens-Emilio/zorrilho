@@ -17,6 +17,9 @@ class VoiceProfile(Base):
     engine = Column(String, nullable=False, default="xtts_v2")
     ref_audio_path = Column(String, nullable=True)
     ref_text = Column(Text, nullable=True)
+    finetune_status = Column(String, nullable=True, default=None)
+    finetune_model_path = Column(String, nullable=True, default=None)
+    finetune_job_id = Column(String, nullable=True, default=None)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     generations = relationship(

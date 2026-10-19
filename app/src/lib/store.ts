@@ -5,6 +5,7 @@ import {
   fetchProfiles,
   fetchGenerations,
   createProfile,
+  createProfileBatch,
   deleteProfile,
   ensureAssets,
   watchProgress,
@@ -22,6 +23,8 @@ interface SidecarState {
   text: string;
   recording: boolean;
   refWav: Uint8Array | null;
+  refFileName: string | null;
+  refFiles: { bytes: Uint8Array; filename: string }[] | null;
   progress: ProgressEvent | null;
   assetsProgress: { done: number; total: number; file: string } | null;
   loading: boolean;
@@ -36,6 +39,8 @@ interface SidecarState {
   setText: (t: string) => void;
   setRecording: (r: boolean) => void;
   setRefWav: (w: Uint8Array | null) => void;
+  setRefFileName: (n: string | null) => void;
+  setRefFiles: (f: { bytes: Uint8Array; filename: string }[] | null) => void;
   setError: (e: string | null) => void;
 
   refresh: () => Promise<void>;
@@ -54,6 +59,8 @@ export const useStore = create<SidecarState>((set, get) => ({
   text: "",
   recording: false,
   refWav: null,
+  refFileName: null,
+  refFiles: null,
   progress: null,
   assetsProgress: null,
   loading: false,
@@ -68,8 +75,9 @@ export const useStore = create<SidecarState>((set, get) => ({
   setText: (t) => set({ text: t }),
   setRecording: (r) => set({ recording: r }),
   setRefWav: (w) => set({ refWav: w }),
+  setRefFileName: (n) => set({ refFileName: n }),
+  setRefFiles: (f) => set({ refFiles: f }),
   setError: (e) => set({ error: e }),
-
   refresh: async () => {
     try {
       const health = await fetchHealth();
@@ -102,15 +110,29 @@ export const useStore = create<SidecarState>((set, get) => ({
       set({ generations: [] });
     }
   },
-
   newProfile: async (name, refText) => {
+    const files = get().refFiles;
     const wav = get().refWav;
-    if (!wav) return set({ error: "Grave uma amostra primeiro." });
+    if (files && files.length > 1) {
+      set({ loading: true, error: null });
+      try {
+        const p = await createProfileBatch(name, files, "xtts_v2", refText);
+        await get().refresh();
+        set({ selectedProfile: p.id, refWav: null, refFileName: null, refFiles: null });
+      } catch (e) {
+        set({ error: `Erro ao criar perfil: ${e}` });
+      } finally {
+        set({ loading: false });
+      }
+      return;
+    }
+    if (!wav) return set({ error: "Grave uma amostra ou importe arquivos primeiro." });
     set({ loading: true, error: null });
     try {
-      const p = await createProfile(name, wav, "xtts_v2", refText);
+      const fname = get().refFileName ?? "ref.wav";
+      const p = await createProfile(name, wav, "xtts_v2", refText, fname);
       await get().refresh();
-      set({ selectedProfile: p.id, refWav: null });
+      set({ selectedProfile: p.id, refWav: null, refFileName: null, refFiles: null });
     } catch (e) {
       set({ error: `Erro ao criar perfil: ${e}` });
     } finally {

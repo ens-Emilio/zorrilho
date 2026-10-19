@@ -1,19 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../lib/store";
-import { exportUrl } from "../lib/sidecar";
+import { exportUrl, preprocess } from "../lib/sidecar";
 import { invoke } from "@tauri-apps/api/core";
 
 export default function ClonarTab() {
   const {
-    recording, setRecording, refWav, setRefWav,
-    profiles, setError, newProfile, error,
+    recording, setRecording, refWav, setRefWav, setRefFileName, refFileName,
+    profiles: _unused, setError, newProfile, error,
   } = useStore();
-
   const [timer, setTimer] = useState(0);
   const [name, setName] = useState("");
   const [denoising, setDenoising] = useState(false);
+  const [importing, setImporting] = useState(false);
   const timerRef = useRef<number>(0);
-
+  const fileRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (recording) {
       timerRef.current = window.setInterval(() => setTimer((s) => s + 0.1), 100);
@@ -25,7 +25,6 @@ export default function ClonarTab() {
 
   const capture: "idle" | "recording" | "denoising" | "ready" =
     refWav && !recording ? "ready" : denoising ? "denoising" : recording ? "recording" : "idle";
-
   function fmt(s: number) {
     const m = String(Math.floor(s / 60)).padStart(2, "0");
     const ss = String(Math.floor(s % 60)).padStart(2, "0");
@@ -45,6 +44,7 @@ export default function ClonarTab() {
         const path = await invoke<string>("record_stop");
         const bytes = await invoke<number[]>("read_file", { path });
         setRefWav(new Uint8Array(bytes));
+        setRefFileName("ref.wav");
         setRecording(false);
         setDenoising(false);
       }
@@ -55,11 +55,115 @@ export default function ClonarTab() {
     }
   }
 
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const list = Array.from(e.target.files ?? []);
+    if (list.length === 0) return;
+    if (list.length > 10) {
+      setError("Máximo 10 arquivos por vez");
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
+    for (const f of list) {
+      if (f.size === 0) {
+        setError(`${f.name}: arquivo vazio`);
+        return;
+      }
+    }
+    setError(null);
+    setImporting(true);
+    try {
+      const { setRefFiles } = useStore.getState();
+      if (list.length === 1) {
+        const buf = new Uint8Array(await list[0].arrayBuffer());
+        setRefWav(buf);
+        setRefFileName(list[0].name);
+        setRefFiles(null);
+        setPreLoading(true);
+        preprocess([{bytes: buf, filename: list[0].name}]).then(r=>{
+          setPreSegments(r.segments);
+          const choice: Record<number,string>={}; r.segments.forEach((s:any)=> choice[s.idx]=s.recommended); setPreChoice(choice as any);
+          const s=r.segments[0];
+          if(s && s.recommended==="clean" && s.wav_b64_clean){
+            try{ const bin=atob(s.wav_b64_clean); const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i); setRefWav(bytes); setRefFileName("limpo: "+list[0].name); }catch{}
+          }
+        }).catch(e=> setError(`Pré-processamento: ${e}`)).finally(()=> setPreLoading(false));
+      } else {
+        const arr = await Promise.all(list.map(async (f) => ({ bytes: new Uint8Array(await f.arrayBuffer()), filename: f.name })));
+        setRefFiles(arr);
+        // keep first as preview + trigger preprocess for real clean preview
+        setRefWav(arr[0].bytes);
+        setRefFileName(`${list.length} arquivos`);
+        // async preview (não bloqueia)
+        setPreLoading(true);
+        preprocess(arr).then(r=>{
+          setPreSegments(r.segments);
+          const choice: Record<number,string> = {};
+          r.segments.forEach((s:any)=> choice[s.idx]=s.recommended);
+          setPreChoice(choice as any);
+          // se limpo recomendado, usa limpo para clonar (decodifica base64)
+          const best = r.segments[r.best_idx];
+          if (best && best.recommended==="clean" && best.wav_b64_clean) {
+            try {
+              const bin = atob(best.wav_b64_clean);
+              const bytes = new Uint8Array(bin.length);
+              for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+              // usa limpo para o clonar efetivo
+              setRefFiles([{bytes, filename: "clean.wav"}]);
+            } catch {}
+          }
+        }).catch(e=> setError(`Pré-processamento: ${e}`)).finally(()=> setPreLoading(false));
+      }
+    } catch (err) {
+      setError(`Falha ao ler arquivos: ${err}`);
+    } finally {
+      setImporting(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
   const pct = Math.min(100, (timer / 6) * 100);
   const progress = useStore((s) => s.progress);
   const gid = progress?.generation_id ?? null;
-  const canCreate = name.trim().length >= 2 && !!refWav && !recording && !denoising;
-  const createLabel = !refWav ? "Criar perfil — gravar primeiro" : !canCreate && name.trim().length < 2 ? "Criar perfil — nome com ≥2 caracteres" : "Criar perfil";
+  const loading = useStore((s) => s.loading);
+  const profiles = useStore((s) => s.profiles);
+  const lastCreated = profiles.length > 0 ? profiles[profiles.length - 1] : null;
+  const [justCreated, setJustCreated] = useState<{id:string;name:string}|null>(null);
+  const [preSegments, setPreSegments] = useState<any[]|null>(null);
+  const [preChoice, setPreChoice] = useState<Record<number,"clean"|"original">>({});
+  const [preLoading, setPreLoading] = useState(false);
+  const canCreate = name.trim().length >= 2 && !!refWav && !recording && !denoising && !loading;
+  const createLabel = loading ? "Clonando..." : !refWav ? "Criar perfil — grave ou importe primeiro" : name.trim().length < 2 ? "Criar perfil — nome com ≥2 caracteres" : "✓ Clonar voz";
+
+  async function handleCreate() {
+    // se preview existe, materializa escolha antes de clonar
+    if (preSegments && preSegments.length>0) {
+      try {
+        const chosen: {bytes:Uint8Array;filename:string}[]=[];
+        for(const s of preSegments){
+          const b64 = preChoice[s.idx]==="clean" ? s.wav_b64_clean : s.wav_b64_original;
+          const bin = atob(b64);
+          const bytes = new Uint8Array(bin.length);
+          for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+          chosen.push({bytes, filename: s.filename.replace(/\.[^.]+$/, "")+".wav"});
+        }
+        if(chosen.length===1){ useStore.getState().setRefWav(chosen[0].bytes); useStore.getState().setRefFileName(chosen[0].filename); useStore.getState().setRefFiles(null); }
+        else { useStore.getState().setRefFiles(chosen); }
+        await new Promise(r=> setTimeout(r, 50));
+      } catch(e){ setError(`Falha ao preparar áudio limpo: ${e}`); return; }
+    }
+    const before = new Set(profiles.map(p=>p.id));
+    await newProfile(name);
+    // detect newly created (store refreshes)
+    setTimeout(()=>{
+      const cur = useStore.getState().profiles;
+      const created = cur.find(p=>!before.has(p.id));
+      if (created) {
+        setJustCreated(created);
+        setName("");
+        setTimeout(()=>setJustCreated(null), 8000);
+      }
+    }, 300);
+  }
 
   return (
     <div className="pane-inner pane-pad" style={{ gap: 12 }}>
@@ -114,12 +218,12 @@ export default function ClonarTab() {
           {refWav && !denoising && (
             <div style={{ display: "flex", gap: 8, flexDirection: "column" }}>
               <div className="audio-row">
-                <span className="meta num" style={{ color: "var(--success)" }}>Voz limpa</span>
+                <span className="meta num" style={{ color: "var(--success)" }}>Voz pronta</span>
                 <span className="meta num" style={{ marginLeft: "auto" }}>{fmt(refWav.length / 48000 / 2)} / {fmt(refWav.length / 48000 / 2)}</span>
               </div>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setRefWav(null); setTimer(0); }}>Descartar / Regravar</button>
-                <span className="meta" style={{ color: "var(--success)" }}>48kHz · {(refWav.length / 1024).toFixed(1)} KB</span>
+                <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setRefWav(null); setRefFileName(null); useStore.getState().setRefFiles(null); setTimer(0); }}>Descartar</button>
+                <span className="meta" style={{ color: "var(--success)" }}>{refFileName ?? "48kHz"} · {(refWav.length / 1024).toFixed(1)} KB</span>
               </div>
               {gid && (
                 <div style={{ display: "flex", gap: 6 }}>
@@ -130,9 +234,41 @@ export default function ClonarTab() {
             </div>
           )}
 
+          {!recording && !denoising && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px", borderRadius: "var(--radius)", background: "var(--elevated)", border: `1px dashed ${refWav ? "var(--success)" : "var(--border)"}` }}>
+              <span className="label-mono">{refWav ? "Trocar / adicionar arquivos" : "Ou importar arquivo"}</span>
+              <span className="meta" style={{ fontSize: 11 }}>Vídeo (mp4/mov/mkv/webm) ou áudio (wav/mp3/m4a/ogg/flac). Selecione até 10 — serão concatenados. Dica: 1 voz limpa, 6–15s por arquivo.</span>
+              <input ref={fileRef} type="file" multiple accept="audio/*,video/*,.mp4,.mkv,.mov,.webm,.avi,.m4a,.mp3,.wav,.ogg,.flac" onChange={handleFile} style={{ fontSize: 12 }} />
+              {importing && <span className="meta" style={{ color: "var(--warning)" }}>Lendo arquivo…</span>}
+              {refWav && <span className="meta" style={{ color: "var(--success)", fontSize: 11 }}>✓ {refFileName} pronto — preencha o nome à direita e clique em Criar perfil</span>}
+            </div>
+          )}
+
+          {preLoading && <div className="meta" style={{color:"var(--warning)"}}>Analisando e limpando áudio (DPDFNet)...</div>}
+          {preSegments && preSegments.length>0 && (
+            <div style={{display:"flex",flexDirection:"column",gap:8,padding:"10px",borderRadius:"var(--radius)",background:"var(--surface)",border:"1px solid var(--border)"}}>
+              <span className="label-mono">Prévia: Original vs Limpo ({preSegments.length} arquivo(s))</span>
+              {preSegments.map((s:any)=> (
+                <div key={s.idx} style={{display:"flex",flexDirection:"column",gap:6,padding:"8px",borderRadius:"var(--radius)",background:"var(--elevated)",border:"1px solid var(--border)"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                    <span className="meta" style={{fontWeight:600}}>{s.filename}</span>
+                    <span className="meta" style={{fontSize:10}}>{s.duration_raw}s → {s.duration_clean}s · SNR {s.snr_raw}dB → {s.snr_clean}dB {s.did_denoise? "· DPDFNet": ""}</span>
+                  </div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    <label style={{display:"flex",alignItems:"center",gap:4,fontSize:12}}><input type="radio" checked={preChoice[s.idx]==="original"} onChange={()=>setPreChoice({...preChoice,[s.idx]:"original"})} /> Original</label>
+                    <label style={{display:"flex",alignItems:"center",gap:4,fontSize:12}}><input type="radio" checked={preChoice[s.idx]==="clean"} onChange={()=>setPreChoice({...preChoice,[s.idx]:"clean"})} /> Limpo {s.recommended==="clean" ? "✓ recomendado":""}</label>
+                  </div>
+                  <div style={{display:"flex",gap:8}}>
+                    <audio controls style={{flex:1, height:32}} src={`data:audio/wav;base64,${s.wav_b64_original}`} />
+                    <audio controls style={{flex:1, height:32}} src={`data:audio/wav;base64,${s.wav_b64_clean}`} />
+                  </div>
+                </div>
+              ))}
+              <span className="meta" style={{fontSize:10}}>Limpo = denoise + trim silêncio + loudnorm. Escolha por arquivo; o clonar usará sua escolha.</span>
+            </div>
+          )}
           <div className="meta" style={{ fontSize: 10 }}>{profiles.length} perfis · {refWav ? "amostra pronta" : "sem amostra"}</div>
         </div>
-
         <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
           <div>
             <span className="label-mono">Criar perfil</span>
@@ -153,7 +289,38 @@ export default function ClonarTab() {
             <span className="meta num" style={{ marginLeft: "auto" }}>{refWav ? `#${(refWav.length % 9973).toString(16).padStart(3, "0")} · ${(refWav.length / 48000 / 2).toFixed(1)}s` : "# —"}</span>
           </div>
 
-          <button className="btn btn-primary btn-block" disabled={!canCreate} onClick={() => canCreate && newProfile(name)}>{createLabel}</button>
+          <button className="btn btn-primary btn-block" disabled={!canCreate} onClick={() => canCreate && handleCreate()}>{loading ? <span style={{display:"inline-flex",alignItems:"center",gap:8}}><span style={{width:14,height:14,border:"2px solid rgba(255,255,255,.3)",borderTopColor:"#fff",borderRadius:"50%",display:"inline-block",animation:"spin .7s linear infinite"}}/> Clonando...</span> : createLabel}</button>
+          {justCreated && (
+            <div style={{padding:"10px 12px",borderRadius:"var(--radius)",background:"color-mix(in oklch, var(--success) 12%, var(--surface))",border:"1px solid color-mix(in oklch, var(--success) 40%, var(--border))",display:"flex",flexDirection:"column",gap:6}}>
+              <span style={{fontSize:12,fontWeight:600,color:"var(--success)"}}>✓ Voz clonada: {justCreated.name}</span>
+              <span className="meta" style={{fontSize:11}}>Perfil disponível na aba <b>Estúdio</b> para gerar falas. ID: {justCreated.id.slice(0,8)}…</span>
+              <div style={{display:"flex",gap:6}}>
+                <button className="btn btn-secondary" style={{flex:1,fontSize:12}} onClick={()=>{useStore.getState().setSelectedProfile(justCreated.id); useStore.getState().setActiveTab("estudio");}}>Ir para Estúdio →</button>
+                <button className="btn btn-ghost" style={{fontSize:12}} onClick={()=>setJustCreated(null)}>Fechar</button>
+              </div>
+            </div>
+          )}
+          {justCreated && (
+            <div style={{padding:"10px",borderRadius:"var(--radius)",background:"var(--elevated)",border:"1px solid var(--border)",display:"flex",flexDirection:"column",gap:6}}>
+              <span className="label-mono">Alta fidelidade (opcional)</span>
+              <span className="meta" style={{fontSize:11}}>Para voz 95% idêntica, treine finetune GPT-SoVITS (precisa 60s-10min de áudio limpo + GPU).</span>
+              <button className="btn btn-secondary" style={{fontSize:12}} onClick={async()=>{
+                try {
+                  const r = await fetch(`${(await import("../lib/sidecar")).SIDECAR_URL}/api/voices/${justCreated.id}/finetune`, {method:"POST"});
+                  const j = await r.json();
+                  if(!r.ok) throw new Error(j.detail || JSON.stringify(j));
+                  alert(`Treino iniciado: ${j.job_id}. Acompanhe na aba Estúdio / Projetos.`);
+                } catch(e:any){ alert(`Finetune: ${e.message}`); }
+              }}>Treinar finetune (60s+ limpo)</button>
+            </div>
+          )}
+          {profiles.length > 0 && !justCreated && (
+            <div className="meta" style={{fontSize:11,display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+              <span style={{color:"var(--success)"}}>● {profiles.length} voz(es) clonada(s)</span>
+              <span>— último: <b>{lastCreated?.name}</b></span>
+              <button className="btn btn-ghost" style={{fontSize:11,padding:"2px 6px"}} onClick={()=>useStore.getState().setActiveTab("estudio")}>Ir para Estúdio</button>
+            </div>
+          )}
 
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <span className="meta" style={{ padding: "3px 6px", borderRadius: "var(--radius)", background: "var(--elevated)", border: "1px solid var(--border)" }}>XTTS · #8B5CF6</span>

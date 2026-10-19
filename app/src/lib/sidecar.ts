@@ -37,6 +37,7 @@ export interface Generation {
 
 export async function fetchHealth(): Promise<Health> {
   const res = await fetch(`${SIDECAR_URL}/health`);
+  if (!res.ok) throw new Error(`health ${res.status}`);
   return res.json();
 }
 
@@ -49,15 +50,73 @@ export async function createProfile(
   name: string,
   wavBytes: Uint8Array,
   engine = "xtts_v2",
-  refText?: string
+  refText?: string,
+  filename = "ref.wav"
 ): Promise<{ id: string; name: string; engine: string }> {
-  const blob = new Blob([wavBytes as BlobPart], { type: "audio/wav" });
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "wav";
+  const mime =
+    ext === "mp4" || ext === "mov" || ext === "mkv" || ext === "webm" || ext === "avi"
+      ? "video/mp4"
+      : ext === "mp3"
+        ? "audio/mpeg"
+        : ext === "ogg"
+          ? "audio/ogg"
+          : ext === "flac"
+            ? "audio/flac"
+            : "audio/wav";
+  const blob = new Blob([wavBytes as BlobPart], { type: mime });
   const fd = new FormData();
   fd.append("name", name);
   fd.append("engine", engine);
   if (refText) fd.append("ref_text", refText);
-  fd.append("ref_audio", blob, "ref.wav");
+  fd.append("ref_audio", blob, filename);
   const res = await fetch(`${SIDECAR_URL}/api/profiles`, { method: "POST", body: fd });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+export async function createProfileBatch(
+  name: string,
+  files: { bytes: Uint8Array; filename: string }[],
+  engine = "xtts_v2",
+  refText?: string
+): Promise<{ id: string; name: string; engine: string }> {
+  const fd = new FormData();
+  fd.append("name", name);
+  fd.append("engine", engine);
+  if (refText) fd.append("ref_text", refText);
+  for (const f of files) {
+    const ext = f.filename.split(".").pop()?.toLowerCase() ?? "wav";
+    const mime = ext === "mp4" || ext === "mov" || ext === "mkv" || ext === "webm" || ext === "avi" ? "video/mp4" : ext === "mp3" ? "audio/mpeg" : "audio/wav";
+    fd.append("files", new Blob([f.bytes as BlobPart], { type: mime }), f.filename);
+  }
+  const res = await fetch(`${SIDECAR_URL}/api/profiles/batch`, { method: "POST", body: fd });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+
+export interface PreprocessSegment {
+  idx: number;
+  filename: string;
+  duration_raw: number;
+  duration_clean: number;
+  snr_raw: number;
+  snr_clean: number;
+  clipping_raw: number;
+  clipping_clean: number;
+  did_denoise: boolean;
+  recommended: "clean" | "original";
+  wav_b64_original: string;
+  wav_b64_clean: string;
+}
+export async function preprocess(files: { bytes: Uint8Array; filename: string }[]): Promise<{ segments: PreprocessSegment[]; best_idx: number }> {
+  const fd = new FormData();
+  for (const f of files) {
+    const ext = f.filename.split(".").pop()?.toLowerCase() ?? "wav";
+    const mime = ext === "mp4" || ext === "mov" || ext === "mkv" || ext === "webm" || ext === "avi" ? "video/mp4" : ext === "mp3" ? "audio/mpeg" : "audio/wav";
+    fd.append("files", new Blob([f.bytes as BlobPart], { type: mime }), f.filename);
+  }
+  const res = await fetch(`${SIDECAR_URL}/api/preprocess`, { method: "POST", body: fd });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -107,10 +166,9 @@ export function watchProgress(
   onEvent: (ev: ProgressEvent) => void,
   onError?: (e: Event) => void
 ): () => void {
-  // Se SIDECAR_URL for vazio (Vite proxy), deriva do location; caso contrário usa o próprio SIDECAR_URL
   const base = SIDECAR_URL
     ? SIDECAR_URL.replace(/^http/, "ws")
-    : `ws://${window.location.host}${window.location.port === "5173" ? ":8765" : ""}`;
+    : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
   const ws = new WebSocket(`${base}/ws/progress/${taskId}`);
   let closed = false;
   const timer = window.setTimeout(() => {

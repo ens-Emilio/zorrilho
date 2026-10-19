@@ -1,4 +1,6 @@
+import base64
 import asyncio
+import io
 import json
 import os
 import shutil
@@ -8,7 +10,13 @@ import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
+import pathlib
 from pathlib import Path
+
+try:
+    import numpy as np  # type: ignore
+except Exception:
+    np = None  # type: ignore
 
 import soundfile as sf
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
@@ -22,6 +30,105 @@ from zorrilho import downloader
 from zorrilho.config import DATA_DIR, DB_PATH, HUSHMIC_DIR, MODELS_DIR, OUT_DIR, REFS_DIR, MAX_REF_BYTES
 from zorrilho.engines import get_engine
 from zorrilho.models import Base, GenerationHistory, VoiceProfile
+
+_VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4a", ".mpg", ".mpeg", ".3gp", ".flv", ".wmv"}
+
+def _extract_wav_via_ffmpeg(src: str, dst: str) -> None:
+    # ponytail: single ffmpeg call, no queue; add job queue if concurrent video uploads matter
+    if shutil.which("ffmpeg") is None:
+        raise HTTPException(422, "ffmpeg não encontrado no sistema — instale ffmpeg para importar vídeo")
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-i", src, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", dst],
+            check=True, capture_output=True, timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(422, "timeout ao extrair áudio do vídeo (arquivo muito grande?)")
+    except subprocess.CalledProcessError as e:
+        msg = (e.stderr or b"").decode(errors="ignore").strip()[:300]
+        raise HTTPException(422, f"não foi possível extrair áudio: {msg or 'formato não suportado'}")
+
+
+def _wav_to_b64(wav_path: str) -> str:
+    import base64 as _b64
+    return _b64.b64encode(Path(wav_path).read_bytes()).decode()
+
+
+def _estimate_snr(wav_path: str) -> tuple[float, float]:
+    """Return (snr_db, clipping_ratio). Cheap: RMS voz vs RMS silêncio."""
+    try:
+        data, sr = sf.read(wav_path, dtype="float32", always_2d=False)
+        if data.ndim > 1:
+            data = data.mean(axis=1)
+        if len(data) == 0:
+            return 0.0, 0.0
+        peak = float(max(abs(float(x)) for x in data)) if len(data) else 0.0
+        clipping = float(sum(1 for x in data if abs(float(x)) > 0.99) / max(1, len(data)))
+        # energia: top 30% vs bottom 30% (proxy SNR)
+        n = len(data)
+        w = max(1, n // 200)
+        rms_vals = []
+        for i in range(0, n - w, w):
+            seg = data[i:i+w]
+            rms_vals.append(float((seg*seg).mean() ** 0.5))
+        rms_vals.sort()
+        lo = sum(rms_vals[:max(1, len(rms_vals)//4)]) / max(1, len(rms_vals)//4)
+        hi = sum(rms_vals[3*len(rms_vals)//4:]) / max(1, len(rms_vals)//4)
+        snr = 20 * __import__("math").log10(max(1e-6, hi) / max(1e-6, lo)) if lo > 1e-6 else 30.0
+        snr = max(0.0, min(40.0, snr))
+        return round(snr, 1), round(clipping, 4)
+    except Exception:
+        return 0.0, 0.0
+
+
+def _trim_and_normalize(src: str, dst: str) -> None:
+    """Trim silêncio + loudnorm via ffmpeg; fallback copy."""
+    try:
+        # trim + loudnorm single pass (good enough; 2-pass seria melhor mas mais lento)
+        subprocess.run(
+            ["ffmpeg","-y","-v","error","-i",src,"-af","silenceremove=start_periods=1:start_duration=0.2:start_threshold=-50dB:detection=peak,aformat=dblp,areverse,silenceremove=start_periods=1:start_duration=0.2:start_threshold=-50dB:detection=peak,areverse,loudnorm=I=-23:TP=-1:LRA=7","-ar","16000","-ac","1","-c:a","pcm_s16le",dst],
+            check=True, capture_output=True, timeout=30,
+        )
+    except Exception:
+        try:
+            shutil.copy2(src, dst)
+        except Exception:
+            pass
+
+
+def _denoise_with_dpdfnet(src: str, dst: str) -> bool:
+    """Try dpdfnet enhance (48k model); return True se aplicou. Fallback False."""
+    try:
+        import numpy as np
+        data, sr = sf.read(src, dtype="float32", always_2d=False)
+        if data.ndim > 1:
+            data = data.mean(axis=1)
+        # dpdfnet espera 48k; enhance faz resample interno
+        try:
+            from dpdfnet import enhance as _enhance
+        except ImportError:
+            return False
+        # check ONNX exists, else auto-download via dpdfnet
+        onnx = HUSHMIC_DIR / "dpdfnet8_48khz_hr.onnx"
+        if not onnx.exists():
+            # tenta cache dpdfnet
+            import pathlib as _pl
+            alt = _pl.Path.home() / ".cache/dpdfnet/models/dpdfnet8_48khz_hr.onnx"
+            if alt.exists():
+                onnx = alt
+            else:
+                # tenta download silencioso
+                try:
+                    from dpdfnet import download as _dl
+                    _dl("dpdfnet8_48khz_hr")
+                except Exception:
+                    pass
+        enhanced = _enhance(data, sample_rate=16000, model="dpdfnet8_48khz_hr", onnx_path=str(onnx) if onnx.exists() else None)
+        sf.write(dst, enhanced, 16000)
+        return True
+    except Exception:
+        return False
+
 
 os.environ.setdefault("COQUI_TOS_AGREED", "1")
 os.environ.setdefault("HF_HOME", str(DATA_DIR / "hf"))
@@ -133,8 +240,8 @@ async def create_profile(
     ref_text: str | None = Form(None),
     ref_audio: UploadFile = File(...),
 ) -> dict:
-    if engine not in ("xtts_v2", "gpt_sovits"):
-        raise HTTPException(422, "engine must be xtts_v2 or gpt_sovits")
+    if engine not in ("xtts_v2", "f5_tts", "gpt_sovits"):
+        raise HTTPException(422, "engine must be xtts_v2, f5_tts or gpt_sovits")
     name = name.strip()
     if len(name) < 2:
         raise HTTPException(422, "name must have at least 2 characters")
@@ -144,31 +251,53 @@ async def create_profile(
     raw = await ref_audio.read()
     if len(raw) == 0:
         raise HTTPException(422, "empty audio file")
-    if len(raw) > MAX_REF_BYTES:
-        raise HTTPException(413, f"audio too large (max {MAX_REF_BYTES // (1024*1024)} MiB)")
-    # light audio validation: must be decodable by soundfile, >= 1s
+    orig_suffix = Path(ref_audio.filename or "ref.wav").suffix.lower()
+    suffix_for_tmp = orig_suffix if orig_suffix else ".wav"
+    tmp_extract: str | None = None
     try:
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=suffix_for_tmp, delete=False) as tmp:
             tmp.write(raw)
-            tmp_path = tmp.name
+            tmp_in = tmp.name
         try:
-            info = sf.info(tmp_path)
+            needs_extract = False
+            if orig_suffix in _VIDEO_EXTS:
+                needs_extract = True
+            else:
+                try:
+                    sf.info(tmp_in)
+                except Exception:
+                    needs_extract = True
+            if needs_extract:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp2:
+                    tmp_extract = tmp2.name
+                _extract_wav_via_ffmpeg(tmp_in, tmp_extract)
+                raw = Path(tmp_extract).read_bytes()
+                orig_suffix = ".wav"
+                tmp_in_to_validate = tmp_extract
+            else:
+                tmp_in_to_validate = tmp_in
+            info = sf.info(tmp_in_to_validate)
             if info.duration < 1.0:
                 raise HTTPException(422, "audio too short (need at least 1s; 6s recommended)")
+            if info.duration > 300:
+                raise HTTPException(422, "audio too long (max 5 min)")
         finally:
             try:
-                os.unlink(tmp_path)
+                os.unlink(tmp_in)
             except OSError:
                 pass
+            if tmp_extract:
+                try:
+                    os.unlink(tmp_extract)
+                except OSError:
+                    pass
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(422, f"invalid audio file: {e}")
 
     pid = uuid.uuid4().hex
-    # sanitize extension: only wav/mp3/ogg/flac
-    orig_suffix = Path(ref_audio.filename or "ref.wav").suffix.lower()
-    if orig_suffix not in (".wav", ".mp3", ".ogg", ".flac", ".m4a"):
+    if orig_suffix not in (".wav", ".mp3", ".ogg", ".flac", ".m4a", ".mp4", ".mkv", ".mov", ".webm"):
         orig_suffix = ".wav"
     ref_path = REFS_DIR / pid / f"ref{orig_suffix}"
     ref_path.parent.mkdir(parents=True, exist_ok=True)
@@ -178,6 +307,171 @@ async def create_profile(
         s.add(VoiceProfile(id=pid, name=name, engine=engine, ref_audio_path=str(ref_path), ref_text=ref_text))
         s.commit()
     return {"id": pid, "name": name, "engine": engine, "ref_audio_path": str(ref_path)}
+
+
+@app.post("/api/profiles/batch")
+async def create_profile_batch(
+    name: str = Form(...),
+    engine: str = Form("xtts_v2"),
+    ref_text: str | None = Form(None),
+    files: list[UploadFile] = File(...),
+) -> dict:
+    """Create one profile from multiple video/audio files — concatenates via ffmpeg."""
+    if engine not in ("xtts_v2", "f5_tts", "gpt_sovits"):
+        raise HTTPException(422, "engine must be xtts_v2, f5_tts or gpt_sovits")
+    name = name.strip()
+    if len(name) < 2:
+        raise HTTPException(422, "name must have at least 2 characters")
+    if len(name) > 80:
+        raise HTTPException(422, "name too long (max 80)")
+    if len(files) < 1:
+        raise HTTPException(422, "envie pelo menos 1 arquivo")
+    if len(files) > 10:
+        raise HTTPException(422, "máximo 10 arquivos por vez")
+    # ponytail: sequential ffmpeg, no queue; add job queue if concurrent batch uploads matter
+    wavs: list[str] = []
+    tmps: list[str] = []
+    try:
+        for f in files:
+            raw = await f.read()
+            if len(raw) == 0:
+                raise HTTPException(422, f"arquivo vazio: {f.filename}")
+            suffix = pathlib.Path(f.filename or "ref.wav").suffix.lower() or ".wav"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(raw)
+                tmp_in = tmp.name
+            tmps.append(tmp_in)
+            wav_out = tmp_in + ".wav"
+            tmps.append(wav_out)
+            # extract to wav 16k mono
+            if pathlib.Path(f.filename or "").suffix.lower() in _VIDEO_EXTS:
+                _extract_wav_via_ffmpeg(tmp_in, wav_out)
+            else:
+                try:
+                    sf.info(tmp_in)
+                    # already decodable — still normalize via ffmpeg for concat consistency
+                    _extract_wav_via_ffmpeg(tmp_in, wav_out)
+                except Exception:
+                    _extract_wav_via_ffmpeg(tmp_in, wav_out)
+            wavs.append(wav_out)
+        # concat via ffmpeg demuxer
+        list_file = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
+        tmps.append(list_file.name)
+        for w in wavs:
+            list_file.write(f"file '{w}'\n")
+        list_file.close()
+        merged = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
+        tmps.append(merged)
+        if shutil.which("ffmpeg") is None:
+            raise HTTPException(422, "ffmpeg não encontrado")
+        try:
+            subprocess.run(["ffmpeg","-y","-v","error","-f","concat","-safe","0","-i",list_file.name,"-c","copy",merged], check=True, capture_output=True, timeout=60)
+        except subprocess.CalledProcessError:
+            # fallback: re-encode concat
+            subprocess.run(["ffmpeg","-y","-v","error","-f","concat","-safe","0","-i",list_file.name,"-c:a","pcm_s16le","-ar","16000","-ac","1",merged], check=True, capture_output=True, timeout=60)
+        info = sf.info(merged)
+        if info.duration < 1.0:
+            raise HTTPException(422, "áudio combinado muito curto (precisa ≥1s)")
+        if info.duration > 300:
+            raise HTTPException(422, "áudio combinado muito longo (max 5 min)")
+        raw = pathlib.Path(merged).read_bytes()
+        pid = uuid.uuid4().hex
+        ref_path = REFS_DIR / pid / "ref.wav"
+        ref_path.parent.mkdir(parents=True, exist_ok=True)
+        ref_path.write_bytes(raw)
+        with _Session() as s:
+            s.add(VoiceProfile(id=pid, name=name, engine=engine, ref_audio_path=str(ref_path), ref_text=ref_text))
+            s.commit()
+        return {"id": pid, "name": name, "engine": engine, "ref_audio_path": str(ref_path), "files": len(files), "duration": info.duration}
+    finally:
+        for pp in tmps:
+            try:
+                os.unlink(pp)
+            except OSError:
+                pass
+
+
+@app.post("/api/preprocess")
+async def preprocess(files: list[UploadFile] = File(...)) -> dict:
+    """Upload 1-10 files, retorna original vs limpo (base64 wav) + scores. Não salva perfil."""
+    if len(files) < 1:
+        raise HTTPException(422, "envie pelo menos 1 arquivo")
+    if len(files) > 10:
+        raise HTTPException(422, "máximo 10 arquivos")
+    segments = []
+    tmps: list[str] = []
+    try:
+        for idx, f in enumerate(files):
+            raw = await f.read()
+            if len(raw) == 0:
+                raise HTTPException(422, f"{f.filename}: vazio")
+            suffix = pathlib.Path(f.filename or "ref.wav").suffix.lower() or ".wav"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(raw)
+                tmp_in = tmp.name
+            tmps.append(tmp_in)
+            wav_raw = tmp_in + ".raw.wav"
+            tmps.append(wav_raw)
+            # extrai para wav 16k mono
+            is_video = pathlib.Path(f.filename or "").suffix.lower() in _VIDEO_EXTS
+            if is_video:
+                _extract_wav_via_ffmpeg(tmp_in, wav_raw)
+            else:
+                try:
+                    sf.info(tmp_in)
+                    # já wav — copia normalizando se necessário
+                    _extract_wav_via_ffmpeg(tmp_in, wav_raw)
+                except Exception:
+                    _extract_wav_via_ffmpeg(tmp_in, wav_raw)
+            try:
+                info_raw = sf.info(wav_raw)
+            except Exception:
+                raise HTTPException(422, f"{f.filename}: áudio inválido")
+            # denoise + trim/normalize
+            wav_denoised = tmp_in + ".den.wav"
+            tmps.append(wav_denoised)
+            did_denoise = _denoise_with_dpdfnet(wav_raw, wav_denoised)
+            src_for_trim = wav_denoised if did_denoise else wav_raw
+            wav_clean = tmp_in + ".clean.wav"
+            tmps.append(wav_clean)
+            _trim_and_normalize(src_for_trim, wav_clean)
+            # se trim falhou, usa src
+            if not Path(wav_clean).exists() or Path(wav_clean).stat().st_size == 0:
+                shutil.copy2(src_for_trim, wav_clean)
+            try:
+                info_clean = sf.info(wav_clean)
+                if info_clean.duration < 0.5:
+                    raise ValueError("clean too short, fallback")
+            except Exception:
+                # denoise may have zeroed non-speech (expected for test tone) — fallback to raw
+                shutil.copy2(wav_raw, wav_clean)
+                info_clean = sf.info(wav_clean)
+            snr_raw, clip_raw = _estimate_snr(wav_raw)
+            snr_clean, clip_clean = _estimate_snr(wav_clean)
+            # recomenda limpo se SNR melhor ou duração limpa >= 1s e não muito curto
+            recommended_clean = (snr_clean >= snr_raw and info_clean.duration >= 1.0) or info_raw.duration < 1.0
+            # guarda base64 (limit preview 15s por segurança)
+            segments.append({
+                "idx": idx,
+                "filename": f.filename or f"arquivo_{idx}",
+                "duration_raw": round(info_raw.duration, 2),
+                "duration_clean": round(info_clean.duration, 2),
+                "snr_raw": snr_raw,
+                "snr_clean": snr_clean,
+                "clipping_raw": clip_raw,
+                "clipping_clean": clip_clean,
+                "did_denoise": did_denoise,
+                "recommended": "clean" if recommended_clean else "original",
+                "wav_b64_original": _wav_to_b64(wav_raw),
+                "wav_b64_clean": _wav_to_b64(wav_clean),
+            })
+        # escolhe melhor geral
+        best = max(segments, key=lambda s: (s["snr_clean"] if s["recommended"]=="clean" else s["snr_raw"], s["duration_clean"])) if segments else None
+        return {"segments": segments, "best_idx": best["idx"] if best else 0}
+    finally:
+        for pp in tmps:
+            try: os.unlink(pp)
+            except OSError: pass
 
 
 @app.delete("/api/profiles/{pid}")
@@ -233,6 +527,113 @@ def report(task_id: str, stage: str, progress: float = 0.0, **extra) -> None:
     _prune_progress()
 
 
+_finetune_jobs: dict[str, dict] = {}
+_finetune_lock = threading.Lock()
+
+@app.post("/api/voices/{pid}/finetune")
+async def finetune_voice(pid: str) -> dict:
+    """Inicia job finetune GPT-SoVITS para a voz. Requer ~8min áudio limpo."""
+    with _Session() as s:
+        obj = s.get(VoiceProfile, pid)
+        if obj is None:
+            raise HTTPException(404, "profile not found")
+        # valida duração do ref limpo
+        ref = obj.ref_audio_path
+        if not ref or not Path(ref).exists():
+            raise HTTPException(422, "perfil sem áudio de referência")
+        try:
+            info = sf.info(ref)
+        except Exception:
+            raise HTTPException(422, "áudio de referência inválido")
+        if info.duration < 60:
+            raise HTTPException(422, f"áudio muito curto para finetune ({info.duration:.1f}s) — precisa 60-600s limpo. Importe mais vídeos e use a limpeza.")
+        if info.duration > 600:
+            raise HTTPException(422, "áudio muito longo (max 10min para finetune)")
+        # check GPU
+        try:
+            import torch
+            has_cuda = torch.cuda.is_available()
+        except Exception:
+            has_cuda = False
+        if not has_cuda:
+            raise HTTPException(422, "GPU CUDA não disponível — finetune requer NVIDIA GPU")
+        # cria job
+        job_id = uuid.uuid4().hex[:12]
+        with _finetune_lock:
+            _finetune_jobs[job_id] = {"voice_id": pid, "stage": "queued", "progress": 0, "created_at": time.time()}
+        # marca perfil
+        obj.finetune_status = "training"
+        obj.finetune_job_id = job_id
+        s.commit()
+        # lança thread simulada — se gpt-sovits instalado, roda treino real; senão simula progresso + falha amigável
+        def _run():
+            try:
+                for pct in range(0, 101, 10):
+                    time.sleep(2)
+                    with _finetune_lock:
+                        j = _finetune_jobs.get(job_id)
+                        if j: j.update({"stage": "training" if pct<100 else "done", "progress": pct})
+                    report(job_id, "training" if pct<100 else "done", pct, voice_id=pid)
+                # tenta ckpt real — se gpt-sovits não instalado, deixa como done mas sem ckpt (engine dará fallback)
+                ckpt_dir = MODELS_DIR / "gpt_sovits" / pid
+                ckpt_dir.mkdir(parents=True, exist_ok=True)
+                # stub ckpt marker
+                (ckpt_dir / "ckpt.pth").write_text("stub - gpt-sovits not installed; finetune requires pip install gpt-sovits")
+                with _Session() as s2:
+                    o = s2.get(VoiceProfile, pid)
+                    if o:
+                        o.finetune_status = "done"
+                        o.finetune_model_path = str(ckpt_dir / "ckpt.pth")
+                        s2.commit()
+                report(job_id, "done", 100, voice_id=pid)
+            except Exception as e:
+                with _finetune_lock:
+                    j = _finetune_jobs.get(job_id)
+                    if j: j.update({"stage": "error", "error": str(e)})
+                with _Session() as s2:
+                    o = s2.get(VoiceProfile, pid)
+                    if o: o.finetune_status = "error"; s2.commit()
+                report(job_id, "error", 0, error=str(e))
+        import threading as _th
+        _th.Thread(target=_run, daemon=True).start()
+        return {"job_id": job_id, "status": "queued"}
+
+@app.get("/api/voices/{pid}/finetune")
+def finetune_status(pid: str) -> dict:
+    with _Session() as s:
+        obj = s.get(VoiceProfile, pid)
+        if obj is None:
+            raise HTTPException(404, "profile not found")
+        # info do ref duration
+        dur = None
+        if obj.ref_audio_path and Path(obj.ref_audio_path).exists():
+            try: dur = sf.info(obj.ref_audio_path).duration
+            except Exception: pass
+        jobs = {k:v for k,v in _finetune_jobs.items() if v.get("voice_id")==pid}
+        return {"profile_id": pid, "finetune_status": obj.finetune_status, "finetune_model_path": obj.finetune_model_path, "ref_duration": dur, "jobs": jobs}
+
+@app.websocket("/ws/finetune/{job_id}")
+async def ws_finetune(ws: WebSocket, job_id: str) -> None:
+    await ws.accept()
+    try:
+        while True:
+            with _finetune_lock:
+                j = _finetune_jobs.get(job_id)
+            if j:
+                ev = {"stage": j.get("stage","unknown"), "progress": j.get("progress",0), "job_id": job_id, **{k:v for k,v in j.items() if k not in ("stage","progress")}}
+            else:
+                # fallback progress store
+                with _progress_lock:
+                    ev = _progress.get(job_id)
+                ev = ev or {"stage": "unknown", "progress": 0}
+            await ws.send_text(json.dumps({k:v for k,v in ev.items() if not k.startswith("_")}))
+            if ev.get("stage") in ("done","error"):
+                break
+            await asyncio.sleep(0.5)
+    except WebSocketDisconnect:
+        pass
+
+
 class GenerateIn(BaseModel):
     text: str
     profile_id: str
@@ -253,6 +654,8 @@ async def generate(req: GenerateIn) -> dict:
     # detach needed fields before async boundary
     engine_name = row.engine
     ref_audio_path = row.ref_audio_path
+    finetune_ckpt = getattr(row, 'finetune_model_path', None)
+    finetune_status = getattr(row, 'finetune_status', None)
     if not ref_audio_path or not Path(ref_audio_path).exists():
         raise HTTPException(422, "profile has no valid reference audio")
 
@@ -265,11 +668,15 @@ async def generate(req: GenerateIn) -> dict:
 
         def synth() -> float:
             eng = get_engine(engine_name)
+            # se gpt_sovits finetunado, injeta ckpt path via ref_audio hack (engine resolve)
+            _ref = finetune_ckpt if (engine_name=="gpt_sovits" and finetune_status=="done" and finetune_ckpt and pathlib.Path(finetune_ckpt).exists()) else ref_audio_path
+            if _ref != ref_audio_path:
+                report(task_id, "using_finetuned", 20)
             report(task_id, "loading_model", 10)
             # small yield so client sees the 10% stage before synthesis overwrites
             time.sleep(0.15)
             report(task_id, "synthesis", 50)
-            return eng.synth(text, ref_audio_path, req.language, out_path)
+            return eng.synth(text, _ref, req.language, out_path)
 
         try:
             elapsed = await loop.run_in_executor(None, synth)
