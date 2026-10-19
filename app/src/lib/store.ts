@@ -102,6 +102,7 @@ export const useStore = create<SidecarState>((set, get) => ({
         error: isConnRefused ? "Sidecar offline — reiniciando... (porta 8765)" : `Erro ao buscar dados do sidecar: ${msg}`,
         health: { ...get().health, status: isConnRefused ? "offline" : "erro" },
       });
+      console.error("[zorrilho] refresh failed:", msg);
     }
   },
 

@@ -18,8 +18,10 @@ export default function EstudioTab() {
   const generating = loading && !!progress && progress.stage !== "done" && progress.stage !== "error";
   const canGenerate = !!selectedProfile && !!text.trim() && !loading;
   const selectedEngine = profiles.find(p=>p.id===selectedProfile)?.engine ?? "xtts_v2";
-  const genHint = !selectedProfile ? "Selecione uma voz" : !text.trim() ? "Digite um roteiro (12+ palavras para melhor prosódia)" : chars < 20 ? "Roteiro curto — prosódia pode ficar instável" : loading ? `${selectedEngine} rodando...` : "Pronto para gerar";
-
+  // diagnóstico: erros do sidecar aparecem no terminal Vite/Tauri (F12 e console do cargo)
+  if (error) console.error("[zorrilho] Estudio error:", error);
+  if (progress?.stage==="error" && progress.error) console.error("[zorrilho] progress error:", progress.error);
+  const genHint = engineOverride==="gpt_sovits" ? "GPT-SoVITS precisa treino (Clonar → Treinar 95%)" : !selectedProfile ? "Selecione uma voz" : !text.trim() ? "Digite um roteiro (12+ palavras para melhor prosódia)" : chars < 20 ? "Roteiro curto — prosódia pode ficar instável" : loading ? `${engineOverride || selectedEngine} rodando...` : "Pronto para gerar";
   return (
     <div className="pane-inner pane-pad" style={{ gap: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
@@ -72,18 +74,18 @@ export default function EstudioTab() {
       </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <select className="select" style={{height:30}} value={engineOverride} onChange={e=>setEngineOverride(e.target.value)} title="Motor — override do perfil">
+        <select className="select" style={{height:30}} value={engineOverride} onChange={e=>setEngineOverride(e.target.value)} title={engineOverride==="gpt_sovits" ? "GPT-SoVITS requer treino em Clonar/Projetos" : "Motor — override do perfil"}>
           <option value="">Motor: do perfil ({selectedEngine})</option>
           <option value="xtts_v2">XTTS v2 — rápido</option>
           <option value="f5_tts">F5-TTS — prosódia pt-BR</option>
-          <option value="gpt_sovits">GPT-SoVITS (finetunado)</option>
+          <option value="gpt_sovits" disabled>GPT-SoVITS (requer finetune 60s+)</option>
         </select>
         <select className="select" style={{height:30}} value={language} onChange={e=>setLanguage(e.target.value)}>
           <option value="pt">PT-BR</option>
           <option value="en">EN</option>
           <option value="es">ES</option>
         </select>
-        <button className="btn btn-primary" style={{ minWidth: 160 }} disabled={!canGenerate} onClick={() => runGenerate({engineOverride: engineOverride || undefined, language})}>
+        <button className="btn btn-primary" style={{ minWidth: 160 }} disabled={!canGenerate || engineOverride==="gpt_sovits"} onClick={() => runGenerate({engineOverride: engineOverride || undefined, language})}>
           {loading ? `Gerando… ${pct}%` : `Gerar — ${engineOverride || selectedEngine}`}
         </button>
         <span className="meta">{genHint}</span>

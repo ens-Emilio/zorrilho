@@ -730,6 +730,7 @@ async def finetune_voice(pid: str) -> dict:
                         s2.commit()
                 report(job_id, "done", 100, voice_id=pid)
             except Exception as e:
+                print(f"[zorrilho] finetune {job_id} error: {e}", flush=True)
                 with _finetune_lock:
                     j = _finetune_jobs.get(job_id)
                     if j: j.update({"stage": "error", "error": str(e)})
@@ -850,6 +851,7 @@ async def generate(req: GenerateIn) -> dict:
                 elapsed_s=round(elapsed, 2),
             )
         except Exception as e:
+            print(f"[zorrilho] generate {task_id[:8]} error: {e}", flush=True)
             report(task_id, "error", 100, error=str(e))
 
     asyncio.get_running_loop().create_task(run())

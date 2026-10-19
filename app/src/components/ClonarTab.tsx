@@ -297,7 +297,7 @@ export default function ClonarTab() {
             <select className="input" id="engine" value={selectedEngine} onChange={e=>useStore.getState().setSelectedEngine(e.target.value)}>
               <option value="xtts_v2">XTTS v2 — rápido, zero-shot (default)</option>
               <option value="f5_tts">F5-TTS — prosódia pt-BR (pip install f5-tts)</option>
-              <option value="gpt_sovits">GPT-SoVITS v3 — finetune (requer treino)</option>
+              <option value="gpt_sovits" disabled>GPT-SoVITS v3 — finetune (requer treino, em breve)</option>
             </select>
             <span className="meta" style={{fontSize:10}}>{selectedEngine==="f5_tts" ? "pip install f5-tts" : selectedEngine==="gpt_sovits" ? "Stub — use xtts_v2/f5_tts" : "Offline sem deps extras"}</span>
           </div>

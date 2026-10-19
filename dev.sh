@@ -21,7 +21,7 @@ sleep 1
 
 # sobe sidecar — logs filtrados (health polling não polui terminal)
 echo "==> sidecar :8765 (log filtrado, sem flood de /health)"
-# uvicorn com log-level warning esconde INFO de cada GET; erros ainda aparecem
+# --log-level warning esconde GET /health flood; [zorrilho] generate/finetune error usa print() e sempre aparece
 (cd "$SIDECAR" && uv run --python 3.11 uvicorn zorrilho.main:app --host 127.0.0.1 --port 8765 --log-level warning) &
 SIDECAR_PID=$!
 trap 'kill $SIDECAR_PID 2>/dev/null || true; pkill -f "uvicorn zorrilho" 2>/dev/null || true; fuser -k 5173/tcp 2>/dev/null || true' EXIT INT TERM
