@@ -47,7 +47,7 @@ interface SidecarState {
   refreshGenerations: () => Promise<void>;
   newProfile: (name: string, refText?: string) => Promise<void>;
   removeProfile: () => Promise<void>;
-  runGenerate: () => Promise<string | null>;
+  runGenerate: (opts?: { engineOverride?: string; language?: string }) => Promise<string | null>;
   downloadAssets: () => Promise<void>;
 }
 
@@ -155,7 +155,7 @@ export const useStore = create<SidecarState>((set, get) => ({
     }
   },
 
-  runGenerate: async () => {
+  runGenerate: async (opts) => {
     const { selectedProfile, text } = get();
     if (!selectedProfile || !text.trim()) {
       set({ error: "Selecione um perfil e digite um texto." });
@@ -163,7 +163,7 @@ export const useStore = create<SidecarState>((set, get) => ({
     }
     set({ loading: true, error: null, progress: null, lastGenerationId: null });
     try {
-      const taskId = await generateTask(text, selectedProfile, "pt");
+      const taskId = await generateTask(text, selectedProfile, opts?.language ?? "pt", opts?.engineOverride);
       return await new Promise<string>((resolve, reject) => {
         let done = false;
         const finish = (err?: Error, gid?: string) => {

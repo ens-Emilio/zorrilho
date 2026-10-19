@@ -81,7 +81,7 @@ export default function ClonarTab() {
         setPreLoading(true);
         preprocess([{bytes: buf, filename: list[0].name}]).then(r=>{
           setPreSegments(r.segments);
-          const choice: Record<number,string>={}; r.segments.forEach((s:any)=> choice[s.idx]=s.recommended); setPreChoice(choice as any);
+          const choice: Record<number,string>={}; r.segments.forEach((s:any)=> { const rec = typeof s.recommended === "boolean" ? (s.recommended ? "clean" : "original") : (s.recommended_str ?? s.recommended); choice[s.idx]=rec; }); setPreChoice(choice as any);
           const s=r.segments[0];
           if(s && s.recommended==="clean" && s.wav_b64_clean){
             try{ const bin=atob(s.wav_b64_clean); const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i); setRefWav(bytes); setRefFileName("limpo: "+list[0].name); }catch{}
@@ -98,7 +98,7 @@ export default function ClonarTab() {
         preprocess(arr).then(r=>{
           setPreSegments(r.segments);
           const choice: Record<number,string> = {};
-          r.segments.forEach((s:any)=> choice[s.idx]=s.recommended);
+          r.segments.forEach((s:any)=> { const rec = typeof s.recommended === "boolean" ? (s.recommended ? "clean" : "original") : (s.recommended_str ?? s.recommended); choice[s.idx]=rec; });
           setPreChoice(choice as any);
           // se limpo recomendado, usa limpo para clonar (decodifica base64)
           const best = r.segments[r.best_idx];
@@ -256,7 +256,7 @@ export default function ClonarTab() {
                   </div>
                   <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                     <label style={{display:"flex",alignItems:"center",gap:4,fontSize:12}}><input type="radio" checked={preChoice[s.idx]==="original"} onChange={()=>setPreChoice({...preChoice,[s.idx]:"original"})} /> Original</label>
-                    <label style={{display:"flex",alignItems:"center",gap:4,fontSize:12}}><input type="radio" checked={preChoice[s.idx]==="clean"} onChange={()=>setPreChoice({...preChoice,[s.idx]:"clean"})} /> Limpo {s.recommended==="clean" ? "✓ recomendado":""}</label>
+                    <label style={{display:"flex",alignItems:"center",gap:4,fontSize:12}}><input type="radio" checked={preChoice[s.idx]==="clean"} onChange={()=>setPreChoice({...preChoice,[s.idx]:"clean"})} /> Limpo {(typeof s.recommended === "boolean" ? s.recommended : (s.recommended_str??s.recommended)==="clean") ? "✓ recomendado":""}</label>
                   </div>
                   <div style={{display:"flex",gap:8}}>
                     <audio controls style={{flex:1, height:32}} src={`data:audio/wav;base64,${s.wav_b64_original}`} />

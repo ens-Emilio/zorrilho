@@ -138,12 +138,13 @@ export async function fetchGenerations(profileId?: string): Promise<Generation[]
 export async function generate(
   text: string,
   profileId: string,
-  language = "pt"
+  language = "pt",
+  engineOverride?: string
 ): Promise<string> {
   const res = await fetch(`${SIDECAR_URL}/api/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, profile_id: profileId, language }),
+    body: JSON.stringify({ text, profile_id: profileId, language, engine_override: engineOverride ?? null }),
   });
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
@@ -214,6 +215,25 @@ export async function ensureAssets(): Promise<{ status: string; events: unknown[
   const res = await fetch(`${SIDECAR_URL}/api/assets/ensure`, { method: "POST" });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+export async function finetuneVoice(profileId: string): Promise<{ job_id: string; status: string }> {
+  const res = await fetch(`${SIDECAR_URL}/api/voices/${profileId}/finetune`, { method: "POST" });
+  const j = await res.json();
+  if (!res.ok) throw new Error(j.detail || JSON.stringify(j));
+  return j;
+}
+export async function finetuneStatus(profileId: string): Promise<{ profile_id: string; finetune_status: string | null; ref_duration: number | null }> {
+  const res = await fetch(`${SIDECAR_URL}/api/voices/${profileId}/finetune`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+export function watchFinetune(jobId: string, onEvent: (ev: any) => void): () => void {
+  const base = SIDECAR_URL ? SIDECAR_URL.replace(/^http/, "ws") : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
+  const ws = new WebSocket(`${base}/ws/finetune/${jobId}`);
+  ws.onmessage = (ev) => { try { onEvent(JSON.parse(ev.data)); } catch {} };
+  ws.onerror = () => onEvent({ stage: "error" });
+  return () => ws.close();
 }
 
 export function generationAudioUrl(gid: string): string {

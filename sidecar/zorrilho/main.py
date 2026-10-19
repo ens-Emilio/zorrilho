@@ -130,6 +130,126 @@ def _denoise_with_dpdfnet(src: str, dst: str) -> bool:
         return False
 
 
+def _load_wav_as_mono_16k(wav_path: str) -> "tuple[np.ndarray, int]":  # type: ignore
+    """Load wav as mono float32 16kHz. Resample via librosa if needed, else ffmpeg."""
+    try:
+        data, sr = sf.read(wav_path, dtype="float32", always_2d=False)
+        if getattr(data, "ndim", 1) > 1:
+            data = data.mean(axis=1)
+        if sr == 16000:
+            return data.astype("float32") if np is not None else data, 16000
+        # try librosa
+        try:
+            import librosa  # type: ignore
+            y = librosa.resample(data, orig_sr=sr, target_sr=16000)
+            return y.astype("float32") if np is not None else y, 16000
+        except Exception:
+            pass
+        # ffmpeg fallback
+        import tempfile as _tf
+        with _tf.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+            tmp16 = tf.name
+        try:
+            _extract_wav_via_ffmpeg(wav_path, tmp16)
+            d2, sr2 = sf.read(tmp16, dtype="float32", always_2d=False)
+            if getattr(d2, "ndim", 1) > 1:
+                d2 = d2.mean(axis=1)
+            return d2, 16000
+        finally:
+            try:
+                import os as _os
+                _os.unlink(tmp16)
+            except Exception:
+                pass
+    except Exception:
+        return np.array([], dtype="float32") if np is not None else [], 16000
+
+
+def _dpdfnet_denoise(src: str, dst: str) -> bool:
+    """Try dpdfnet (onnxruntime CPU); fallback ffmpeg afftdn. Return True se limpou."""
+    # primeiro tenta dpdfnet
+    try:
+        if _denoise_with_dpdfnet(src, dst):
+            return True
+    except Exception:
+        pass
+    # fallback afftdn
+    try:
+        if shutil.which("ffmpeg") is None:
+            return False
+        subprocess.run(
+            ["ffmpeg","-y","-v","error","-i",src,"-af","afftdn=nr=12:nf=-20:tn=1:tr=20","-ar","16000","-ac","1","-c:a","pcm_s16le",dst],
+            check=True, capture_output=True, timeout=30,
+        )
+        if Path(dst).exists() and Path(dst).stat().st_size > 0:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _trim_silence(src: str, dst: str, thresh_db: float = -50, min_silence: float = 0.2) -> bool:
+    """Remove silêncio início/fim via ffmpeg silenceremove; return True se ok."""
+    try:
+        if shutil.which("ffmpeg") is None:
+            shutil.copy2(src, dst)
+            return False
+        subprocess.run(
+            ["ffmpeg","-y","-v","error","-i",src,"-af",f"silenceremove=start_periods=1:start_duration={min_silence}:start_threshold={thresh_db}dB:detection=peak,aformat=dblp,areverse,silenceremove=start_periods=1:start_duration={min_silence}:start_threshold={thresh_db}dB:detection=peak,areverse","-ar","16000","-ac","1","-c:a","pcm_s16le",dst],
+            check=True, capture_output=True, timeout=30,
+        )
+        return Path(dst).exists() and Path(dst).stat().st_size > 0
+    except Exception:
+        try:
+            shutil.copy2(src, dst)
+        except Exception:
+            pass
+        return False
+
+
+def _loudnorm_via_ffmpeg(src: str, dst: str, target_i: float = -23) -> bool:
+    """Loudness normalize via ffmpeg loudnorm single-pass; fallback copy."""
+    try:
+        if shutil.which("ffmpeg") is None:
+            shutil.copy2(src, dst)
+            return False
+        subprocess.run(
+            ["ffmpeg","-y","-v","error","-i",src,"-af",f"loudnorm=I={target_i}:TP=-1:LRA=7","-ar","16000","-ac","1","-c:a","pcm_s16le",dst],
+            check=True, capture_output=True, timeout=30,
+        )
+        return Path(dst).exists() and Path(dst).stat().st_size > 0
+    except Exception:
+        try:
+            shutil.copy2(src, dst)
+        except Exception:
+            pass
+        return False
+
+
+def _auto_chunks(wav_path: str, max_duration: float = 20.0, overlap: float = 0.0) -> list[tuple[float,float]]:
+    """Split wav into chunks <= max_duration; ponytail: fixed window, no VAD."""
+    try:
+        info = sf.info(wav_path)
+        dur = float(info.duration)
+        if dur <= max_duration or max_duration <= 0:
+            return [(0.0, dur)]
+        step = max_duration - overlap
+        if step <= 0:
+            step = max_duration
+        out: list[tuple[float,float]] = []
+        t = 0.0
+        while t < dur:
+            e = min(t + max_duration, dur)
+            out.append((round(t,3), round(e,3)))
+            t += step
+            if t >= dur:
+                break
+        return out
+    except Exception:
+        return [(0.0, 0.0)]
+
+
+
 os.environ.setdefault("COQUI_TOS_AGREED", "1")
 os.environ.setdefault("HF_HOME", str(DATA_DIR / "hf"))
 os.environ["TTS_HOME"] = str(MODELS_DIR)
@@ -427,17 +547,30 @@ async def preprocess(files: list[UploadFile] = File(...)) -> dict:
                 info_raw = sf.info(wav_raw)
             except Exception:
                 raise HTTPException(422, f"{f.filename}: áudio inválido")
-            # denoise + trim/normalize
+            if info_raw.duration > 300:
+                raise HTTPException(422, f"{f.filename}: áudio muito longo (max 300s)")
+            # denoise (onnxruntime CPU if available, fallback afftdn) + trim + loudnorm
             wav_denoised = tmp_in + ".den.wav"
             tmps.append(wav_denoised)
-            did_denoise = _denoise_with_dpdfnet(wav_raw, wav_denoised)
-            src_for_trim = wav_denoised if did_denoise else wav_raw
+            did_denoise = _dpdfnet_denoise(wav_raw, wav_denoised)
+            src_for_trim = wav_denoised if did_denoise and Path(wav_denoised).exists() and Path(wav_denoised).stat().st_size > 0 else wav_raw
+            wav_trim = tmp_in + ".trim.wav"
+            tmps.append(wav_trim)
+            _trim_silence(src_for_trim, wav_trim)
+            if not Path(wav_trim).exists() or Path(wav_trim).stat().st_size == 0:
+                try:
+                    shutil.copy2(src_for_trim, wav_trim)
+                except Exception:
+                    pass
             wav_clean = tmp_in + ".clean.wav"
             tmps.append(wav_clean)
-            _trim_and_normalize(src_for_trim, wav_clean)
-            # se trim falhou, usa src
+            _loudnorm_via_ffmpeg(wav_trim, wav_clean)
+            # se loudnorm falhou, usa trim
             if not Path(wav_clean).exists() or Path(wav_clean).stat().st_size == 0:
-                shutil.copy2(src_for_trim, wav_clean)
+                try:
+                    shutil.copy2(wav_trim, wav_clean)
+                except Exception:
+                    shutil.copy2(src_for_trim, wav_clean)
             try:
                 info_clean = sf.info(wav_clean)
                 if info_clean.duration < 0.5:
@@ -450,23 +583,33 @@ async def preprocess(files: list[UploadFile] = File(...)) -> dict:
             snr_clean, clip_clean = _estimate_snr(wav_clean)
             # recomenda limpo se SNR melhor ou duração limpa >= 1s e não muito curto
             recommended_clean = (snr_clean >= snr_raw and info_clean.duration >= 1.0) or info_raw.duration < 1.0
-            # guarda base64 (limit preview 15s por segurança)
+            # guarda base64 — inclui aliases para contrato da task (spec) + frontend legacy
+            b64_orig = _wav_to_b64(wav_raw)
+            b64_clean = _wav_to_b64(wav_clean)
+            rec_str = "clean" if recommended_clean else "original"
             segments.append({
                 "idx": idx,
                 "filename": f.filename or f"arquivo_{idx}",
                 "duration_raw": round(info_raw.duration, 2),
                 "duration_clean": round(info_clean.duration, 2),
+                "snr_db": snr_clean,
                 "snr_raw": snr_raw,
                 "snr_clean": snr_clean,
+                "clipping": clip_clean,
                 "clipping_raw": clip_raw,
                 "clipping_clean": clip_clean,
                 "did_denoise": did_denoise,
-                "recommended": "clean" if recommended_clean else "original",
-                "wav_b64_original": _wav_to_b64(wav_raw),
-                "wav_b64_clean": _wav_to_b64(wav_clean),
+                "recommended": recommended_clean,
+                "recommended_str": rec_str,
+                "recommended_label": rec_str,
+                "recommended_choice": rec_str,
+                "wav_base64_original": b64_orig,
+                "wav_base64_clean": b64_clean,
+                "wav_b64_original": b64_orig,
+                "wav_b64_clean": b64_clean,
             })
         # escolhe melhor geral
-        best = max(segments, key=lambda s: (s["snr_clean"] if s["recommended"]=="clean" else s["snr_raw"], s["duration_clean"])) if segments else None
+        best = max(segments, key=lambda s: (s["snr_clean"] if s["recommended"] else s["snr_raw"], s["duration_clean"])) if segments else None
         return {"segments": segments, "best_idx": best["idx"] if best else 0}
     finally:
         for pp in tmps:
@@ -638,6 +781,7 @@ class GenerateIn(BaseModel):
     text: str
     profile_id: str
     language: str = "pt"
+    engine_override: str | None = None
 
 
 @app.post("/api/generate")
@@ -652,7 +796,10 @@ async def generate(req: GenerateIn) -> dict:
     if row is None:
         raise HTTPException(404, "profile not found")
     # detach needed fields before async boundary
-    engine_name = row.engine
+    eff_engine = (req.engine_override.strip() if req.engine_override else None) or row.engine
+    if eff_engine not in ("xtts_v2", "f5_tts", "gpt_sovits"):
+        raise HTTPException(422, "engine_override must be xtts_v2, f5_tts or gpt_sovits")
+    engine_name = eff_engine
     ref_audio_path = row.ref_audio_path
     finetune_ckpt = getattr(row, 'finetune_model_path', None)
     finetune_status = getattr(row, 'finetune_status', None)
