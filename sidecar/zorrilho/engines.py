@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,56 +57,110 @@ class XttsV2Engine:
 
 
 class F5TTSEngine:
-    """F5-TTS zero-shot (melhor prosódia pt-BR que XTTS). Requer: pip install f5-tts"""
-    _model = None
-    _lock = threading.Lock()
+    """F5-TTS zero-shot via subprocess num venv dedicado.
+
+    coqui-tts (XTTS) pina numpy<2 enquanto o f5-tts (via datasets/pyarrow)
+    exige numpy>=2 — não coexistem. Então o F5 roda num venv separado
+    (sidecar/.venv-f5) e este engine despacha um CLI. Ponytail: subprocess
+    por sílaba única de isolamento; se um dia houver só XTTS, remover.
+    """
+
+    def _venv_python(self) -> str | None:
+        # lado a lado do repo: sidecar/.venv-f5
+        here = Path(__file__).resolve()
+        candidates = [
+            here.parent.parent / ".venv-f5" / "bin" / "python",
+            here.parent.parent / ".venv-f5" / "Scripts" / "python.exe",
+        ]
+        for c in candidates:
+            if c.exists():
+                return str(c)
+        return None
+
     def synth(self, text: str, ref_audio: str, language: str, out_path: Path) -> float:
+        import subprocess
         import time
+
+        py = self._venv_python()
+        if py is None:
+            raise RuntimeError(
+                "f5_tts não configurado. Rode: ./scripts/setup-f5.sh "
+                "(cria sidecar/.venv-f5 com numpy>=2 e baixa o modelo ~1.3GB)"
+            )
         t0 = time.monotonic()
-        try:
-            from f5_tts.api import F5TTS  # pip install f5-tts
-        except ImportError:
-            raise RuntimeError("f5_tts não instalado — rode: uv pip install f5-tts --python 3.11  (ou pip install f5-tts)")
-        if F5TTSEngine._model is None:
-            with F5TTSEngine._lock:
-                if F5TTSEngine._model is None:
-                    F5TTSEngine._model = F5TTS()
-        m = F5TTSEngine._model
-        # API varia por versão — tenta infer mais comum
-        if hasattr(m, "infer"):
-            # F5TTS.infer(ref_file, ref_text, gen_text, file_wave)
-            ref_text = ""  # sem transcrição, deixa modelo inferir
-            try:
-                m.infer(ref_file=ref_audio, ref_text=ref_text, gen_text=text, file_wave=str(out_path))
-            except TypeError:
-                # fallback assinatura alternativa
-                m.infer(ref_audio, text, str(out_path))
-        else:
-            raise RuntimeError("F5TTS API incompatível — atualize f5-tts")
+        cli = Path(__file__).resolve().parent / "f5_cli.py"
+        proc = subprocess.run(
+            [py, str(cli), ref_audio, text, language, str(out_path)],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"f5_tts falhou (rc={proc.returncode}): {proc.stderr.strip()}")
         return time.monotonic() - t0
 
 
 class GptSovitsEngine:
-    """GPT-SoVITS v3 — se ckpt finetunado existe, usa-o; senão stub informativo."""
-    _lock = threading.Lock()
+    """GPT-SoVITS finetunado: infere via inference_cli.py do repo (GPT+SoVITS ckpts).
+
+    Recebe em `ref_audio` o path do ckpt SoVITS (*sovits* ou ckpt.pth) escolhido
+    pelo main.py; o GPT ckpt é buscado ao lado (mesmo diretório, G_*.pth/.ckpt).
+    """
+
     def synth(self, text: str, ref_audio: str, language: str, out_path: Path) -> float:
+        import subprocess
+        import tempfile
         import time
+
+        from zorrilho.main import _gpt_sovits_repo
+
+        repo = _gpt_sovits_repo()
+        if repo is None:
+            raise RuntimeError(
+                "GPT-SoVITS não instalado — use xtts_v2/f5_tts ou rode scripts/setup-gpt-sovits.sh"
+            )
+        sovits = Path(ref_audio)
+        if not sovits.is_file():
+            raise RuntimeError(f"ckpt SoVITS inválido: {ref_audio}")
+        # GPT ckpt: procura .ckpt/.pth irmão que NÃO seja o SoVITS (G_/eN.ckpt)
+        gpt = next(
+            (p for p in sorted(sovits.parent.glob("*.ckpt")) if "s1" not in p.name.lower()),
+            None,
+        )
+        if gpt is None:
+            gpt = next((p for p in sorted(sovits.parent.glob("G_*.pth"))), None)
+        if gpt is None:
+            raise RuntimeError(
+                f"ckpt GPT não encontrado ao lado de {sovits.name} (esperado G_*.pth ou *.ckpt)"
+            )
+
+        py = str(next((p for p in repo.rglob("bin/python") if p.exists()), "python"))
         t0 = time.monotonic()
-        # tenta achar ckpt por convenção: MODELS_DIR/gpt_sovits/{voice_hash}/ckpt ou refs resolve fora
-        # o caller (main.py generate) resolve o path real via DB finetune_model_path
-        # este engine é genérico — se ref_audio for diretório de dataset com ckpt, usa; senão tenta fallback
-        ckpt = Path(ref_audio).parent / "finetune" / "ckpt.pth" if Path(ref_audio).is_file() else None
-        # se existe, tenta infer via GPT-SoVITS API (se instalada)
-        if ckpt and ckpt.exists():
-            try:
-                from gpt_sovits.infer import infer as _gs_infer  # placeholder API
-                _gs_infer(ckpt=str(ckpt), ref_audio=ref_audio, text=text, out=str(out_path), language=language)
-                return time.monotonic() - t0
-            except ImportError:
-                pass
-            except Exception as e:
-                raise RuntimeError(f"gpt_sovits ckpt falhou: {e}")
-        raise NotImplementedError("gpt_sovits: precisa treino (POST /api/voices/{id}/finetune com 8-10min limpo). Use xtts_v2 ou f5_tts por enquanto.")
+        with tempfile.TemporaryDirectory() as td:
+            ref_txt = Path(td) / "ref.txt"
+            src_txt = Path(td) / "src.txt"
+            ref_txt.write_text(os.path.splitext(Path(ref_audio).name)[0], encoding="utf-8")
+            src_txt.write_text(text, encoding="utf-8")
+            cmd = [
+                py, "-s", str(repo / "GPT_SoVITS" / "inference_cli.py"),
+                "--gpt_model", str(gpt),
+                "--sovits_model", str(sovits),
+                "--ref_audio", ref_audio,
+                "--ref_text", str(ref_txt),
+                "--ref_language", language,
+                "--target_text", str(src_txt),
+                "--target_language", language,
+                "--output_path", td,
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  cwd=str(repo), timeout=600)
+            if proc.returncode != 0:
+                raise RuntimeError(f"gpt_sovits infer falhou: {proc.stderr.strip()[-400:]}")
+            generated = Path(td) / "output.wav"
+            if not generated.exists():
+                raise RuntimeError("gpt_sovits: inferência não gerou output.wav")
+            out_path.write_bytes(generated.read_bytes())
+        return time.monotonic() - t0
 
 
 ENGINES: dict[str, type[SynthEngine]] = {

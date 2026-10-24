@@ -34,13 +34,24 @@ curl -sf http://127.0.0.1:8765/health 2>&1 | head -c 200; echo ""
 
 if [ "$MODE" = "--vite" ] || [ "$MODE" = "vite" ]; then
   echo "==> vite http://localhost:5178 (só navegador)"
+  cd "$APP"
   [ -d node_modules ] || npm ci
   npm run dev
 else
-  echo "==> tauri dev — abrindo janela desktop (vite + janela)"
-  echo "    (dica: ./dev.sh --vite para só navegador)"
+  echo "==> tauri dev — abrindo janela desktop (vite + janela em paralelo)"
   cd "$APP"
   [ -d node_modules ] || npm ci
-  # tauri dev já roda vite internamente; sidecar já está na :8765 então o spawn do Rust vai só conectar
+  fuser -k 5178/tcp 2>/dev/null || true
+  npm run dev &
+  VITE_PID=$!
+  echo "==> vite http://localhost:5178 (paralelo, aguardando ready)"
+  echo -n "    aguardando vite"
+  for j in $(seq 1 45); do
+    if curl -sf http://localhost:5178/ >/dev/null 2>&1; then echo " ok ✓"; break; fi
+    echo -n "."
+    sleep 1
+    if [ "$j" = 45 ]; then echo " falhou"; kill $VITE_PID 2>/dev/null || true; exit 1; fi
+  done
+  trap 'kill $SIDECAR_PID 2>/dev/null || true; kill $VITE_PID 2>/dev/null || true; pkill -f "uvicorn zorrilho" 2>/dev/null || true; fuser -k 5178/tcp 2>/dev/null || true' EXIT INT TERM
   npx tauri dev
 fi

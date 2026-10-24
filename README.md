@@ -36,7 +36,7 @@ Zorrilho is a desktop app for cloning your own voice from a short reference samp
 │  /ws/progress/{id}, /api/generations,       │
 │  /api/assets/ensure                         │
 │  SQLAlchemy + SQLite  ·  engine registry     │
-│    xtts_v2 (Coqui)  ·  gpt_sovits (stub)    │
+│  xtts_v2 (Coqui) · f5_tts · gpt_sovits (finetune)│
 └─────────────────────────────────────────────┘
 ```
 
@@ -50,7 +50,7 @@ Zorrilho is a desktop app for cloning your own voice from a short reference samp
 | UI | React 19 + TypeScript 6 + Vite 8 + Tailwind CSS v4, Zustand, Headless UI, Heroicons |
 | Audio capture | `cpal` + `hound` + `hushmic-denoiser` (git, `native` feature) |
 | Sidecar | FastAPI + Uvicorn + SQLAlchemy + Alembic + `python-multipart` + `soundfile` + `websockets` |
-| TTS | `coqui-tts==0.25.3` · XTTS v2 `tts_models/multilingual/multi-dataset/xtts_v2`; `gpt_sovits` reserved |
+| TTS | `coqui-tts==0.25.3` (XTTS v2) · `f5-tts` (venv isolado `.venv-f5`) · GPT-SoVITS (finetune via repo + `setup-gpt-sovits.sh`) |
 | Denoising assets | `dpdfnet==0.5.1` (ONNX) + `.weights.f32` from Ceva DPDFNet (pinned commit, SHA-256) |
 | Packaging | `packaging/PKGBUILD` + `zorrilho-sidecar` wrapper (lazy `uv`/`pip` venv) + `zorrilho.desktop` |
 

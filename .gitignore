@@ -10,8 +10,12 @@ src-tauri/binaries/
 src-tauri/gen/
 sidecar/dist/
 sidecar/.venv/
+sidecar/.venv-f5/
 .venv/
 venv/
+# GPT-SoVITS é instalado fora do repo (~/.local/share/zorrilho); nunca versionar
+GPT_SoVITS/
+gpt_sovits/
 env/
 .eggs/
 *.egg-info/

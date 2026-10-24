@@ -670,6 +670,159 @@ def report(task_id: str, stage: str, progress: float = 0.0, **extra) -> None:
     _prune_progress()
 
 
+def _gpt_sovits_repo() -> Path | None:
+    """Localiza o repo GPT-SoVITS (não é pacote pip; é clone com train.py)."""
+    from zorrilho.config import DATA_DIR
+
+    env = os.environ.get("GPT_SOVITS_DIR")
+    candidates = [Path(env)] if env else [
+        DATA_DIR / "gpt_sovits",
+        Path.home() / "GPT-SoVITS",
+        Path.home() / "gpt-sovits",
+        Path("/opt/gpt-sovits"),
+    ]
+    for c in candidates:
+        if (c / "GPT_SoVITS" / "s1_train.py").exists() \
+                and (c / "GPT_SoVITS" / "s2_train.py").exists():
+            return c
+    return None
+
+
+def _merge_parts(prefix: Path, dest: Path, header: list[str] | None = None) -> None:
+    """Concatena as partições `<prefix>-N.ext` em `<dest>` (ordem por N)."""
+    import re
+    def _n(p: Path) -> int:
+        m = re.search(r"-(\d+)$", p.stem)
+        return int(m.group(1)) if m else 0
+    parts = sorted(prefix.parent.glob(prefix.name + "-*"), key=_n)
+    if not parts:
+        return
+    rows: list[str] = ["\t".join(header)] if header else []
+    for part in parts:
+        rows += part.read_text(encoding="utf-8").strip("\n").split("\n")
+        part.unlink()
+    dest.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
+def _run_gpt_sovits_train(pid: str, ref_clean: str, ckpt_dir: Path, job_id: str, language: str = "en") -> Path:
+    """Roda o pipeline real de finetune GPT-SoVITS: prep → s1 (GPT) → s2 (SoVITS).
+
+    Segue a receita do webui.py do repo oficial: 1-get-text, 2-get-hubert-wav32k,
+    3-get-semantic, s1_train.py e s2_train.py, com configs gerados sob exp_dir.
+    """
+    repo = _gpt_sovits_repo()
+    if repo is None:
+        raise RuntimeError(
+            "GPT-SoVITS não instalado. Rode: scripts/setup-gpt-sovits.sh. "
+            "Use xtts_v2 ou f5_tts por enquanto."
+        )
+    pret = repo / "GPT_SoVITS" / "pretrained_models"
+    s2g = pret / "gsv-v2final-pretrained" / "s2G2333k.pth"
+    s2d = pret / "gsv-v2final-pretrained" / "s2D2333k.pth"
+    s1p = pret / "gsv-v2final-pretrained" / "s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt"
+    hubert = pret / "chinese-hubert-base"
+    bert = pret / "chinese-roberta-wwm-ext-large"
+    missing = [p.name for p in (s2g, s2d, s1p, hubert, bert) if not p.exists()]
+    if missing:
+        raise RuntimeError(f"modelos GPT-SoVITS ausentes ({', '.join(missing)}). Rode scripts/setup-gpt-sovits.sh")
+
+    # python do venv dedicado do repo (tem deps do GPT-SoVITS), senão fallback
+    _venv_py = repo / ".venv" / "bin" / "python"
+    py = str(_venv_py) if _venv_py.exists() else "python"
+    exp_name = f"zorrilho_{pid}"
+    exp_dir = repo / "logs" / exp_name
+    exp_dir.mkdir(parents=True, exist_ok=True)
+
+    # fatia o áudio de referência em clips (dataset com N amostras p/ treino)
+    clips_dir = exp_dir / "clips"
+    clips_dir.mkdir(exist_ok=True)
+    subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-i", ref_clean, "-f", "segment",
+         "-segment_time", "8", "-c", "copy", str(clips_dir / "clip_%03d.wav")],
+        check=True, capture_output=True, timeout=120,
+    )
+    clips = sorted(clips_dir.glob("clip_*.wav"))
+    if not clips:
+        raise RuntimeError("falha ao fatiar áudio de referência (sem clips)")
+    listf = exp_dir / "train.list"
+    listf.write_text(
+        "".join(f"{c}|{pid}|{language}|{c.stem}\n" for c in clips),
+        encoding="utf-8",
+    )
+
+    chore = str(repo / "GPT_SoVITS")
+    env_base = {**os.environ,
+                "PYTHONPATH": chore + os.pathsep + str(repo) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+                "inp_text": str(listf),
+                "inp_wav_dir": str(clips_dir),
+                "exp_name": exp_name,
+                "i_part": "0", "all_parts": "1",
+                "opt_dir": str(exp_dir),
+                "bert_pretrained_dir": str(bert),
+                "cnhubert_base_dir": str(hubert),
+                "is_half": "True"}
+
+    def step(name: str, script: str, pct: int, extra_env: dict[str, str] | None = None) -> None:
+        report(job_id, name, pct, voice_id=pid)
+        env = {**env_base, **(extra_env or {})}
+        r = subprocess.run([py, "-s", str(repo / script)], capture_output=True, text=True,
+                           cwd=chore, env=env, timeout=3600)
+        if r.returncode != 0:
+            raise RuntimeError(f"{name} falhou (rc={r.returncode}): {r.stderr.strip()[-400:]}")
+
+    step("prep_text", "GPT_SoVITS/prepare_datasets/1-get-text.py", 15)
+    step("prep_hubert", "GPT_SoVITS/prepare_datasets/2-get-hubert-wav32k.py", 30)
+    step("prep_semantic", "GPT_SoVITS/prepare_datasets/3-get-semantic.py", 45,
+         {"pretrained_s2G": str(s2g), "s2config_path": "configs/s2.json"})
+
+    # merge das partições (webui concatena *-N.tsv → 6-name2semantic.tsv / 2-name2text.txt)
+    _merge_parts(exp_dir / "6-name2semantic", exp_dir / "6-name2semantic.tsv", header=["item_name", "semantic_audio"])
+    _merge_parts(exp_dir / "2-name2text", exp_dir / "2-name2text.txt")
+    # s1 (GPT) — config derivado do s1longer-v2.yaml
+    import yaml  # exposto via coqui-tts
+    s1cfg = yaml.safe_load((repo / "GPT_SoVITS/configs/s1longer-v2.yaml").read_text())
+    s1cfg["output_dir"] = str(exp_dir / "logs_s1_v2")
+    s1cfg["train_semantic_path"] = str(exp_dir / "6-name2semantic.tsv")
+    s1cfg["train_phoneme_path"] = str(exp_dir / "2-name2text.txt")
+    s1cfg["pretrained_s1"] = str(s1p)
+    s1cfg["train"].update({"batch_size": 4, "epochs": 2, "save_every_n_epoch": 1,
+                           "if_save_every_weights": True, "if_save_latest": True,
+                           "if_dpo": False, "exp_name": exp_name,
+                           "half_weights_save_dir": str(ckpt_dir)})
+    s1tmp = exp_dir / "tmp_s1.yaml"
+    s1tmp.write_text(yaml.dump(s1cfg), encoding="utf-8")
+    report(job_id, "train_s1", 60, voice_id=pid)
+    # sobrescreve o comando s1 para passar --config_file (o step genérico não passa args)
+    r1 = subprocess.run([py, "-s", str(repo / "GPT_SoVITS/s1_train.py"),
+                         "--config_file", str(s1tmp)],
+                        capture_output=True, text=True, cwd=chore, env=env_base, timeout=3600)
+    if r1.returncode != 0:
+        raise RuntimeError(f"train_s1 falhou (rc={r1.returncode}): {r1.stderr.strip()[-400:]}")
+
+    # s2 (SoVITS) — config s2.json + caminhos de dataset
+    import json as _json
+    s2cfg = _json.loads((repo / "GPT_SoVITS/configs/s2.json").read_text())
+    s2cfg["data"].update({"exp_dir": str(exp_dir), "training_files": str(exp_dir / "2-name2text.txt"),
+                          "validation_files": str(exp_dir / "2-name2text.txt")})
+    s2cfg["data"]["pretrained_s2G"] = str(s2g)
+    s2cfg["data"]["pretrained_s2D"] = str(s2d)
+    s2cfg["train"].update({"batch_size": 2, "epochs": 2})
+    s2cfg["s2_ckpt_dir"] = str(exp_dir / "logs_s2_v2")
+    s2tmp = exp_dir / "tmp_s2.json"
+    s2tmp.write_text(_json.dumps(s2cfg, indent=2), encoding="utf-8")
+    report(job_id, "train_s2", 80, voice_id=pid)
+    r2 = subprocess.run([py, "-s", str(repo / "GPT_SoVITS/s2_train.py"), "--config", str(s2tmp)],
+                        capture_output=True, text=True, cwd=chore, env=env_base, timeout=7200)
+    if r2.returncode != 0:
+        raise RuntimeError(f"train_s2 falhou (rc={r2.returncode}): {r2.stderr.strip()[-400:]}")
+
+    ckpts = sorted(list((exp_dir).rglob("G_*.pth")) + list((exp_dir).rglob("*.ckpt")))
+    if not ckpts:
+        raise RuntimeError("GPT-SoVITS: pipeline terminou sem gerar ckpt")
+    report(job_id, "training", 95, voice_id=pid)
+    return ckpts[-1]
+
+
 _finetune_jobs: dict[str, dict] = {}
 _finetune_lock = threading.Lock()
 
@@ -692,6 +845,9 @@ async def finetune_voice(pid: str) -> dict:
             raise HTTPException(422, f"áudio muito curto para finetune ({info.duration:.1f}s) — precisa 60-600s limpo. Importe mais vídeos e use a limpeza.")
         if info.duration > 600:
             raise HTTPException(422, "áudio muito longo (max 10min para finetune)")
+        # GPT-SoVITS v2 não treina português; usar F5/XTTS para pt
+        if obj.engine == "gpt_sovits" and (getattr(obj, "language", None) or "pt") == "pt":
+            raise HTTPException(422, "GPT-SoVITS não suporta português no treino (só en/zh/ja/ko/yue). Use f5_tts ou xtts_v2 para pt.")
         # check GPU
         try:
             import torch
@@ -711,22 +867,20 @@ async def finetune_voice(pid: str) -> dict:
         # lança thread simulada — se gpt-sovits instalado, roda treino real; senão simula progresso + falha amigável
         def _run():
             try:
-                for pct in range(0, 101, 10):
-                    time.sleep(2)
-                    with _finetune_lock:
-                        j = _finetune_jobs.get(job_id)
-                        if j: j.update({"stage": "training" if pct<100 else "done", "progress": pct})
-                    report(job_id, "training" if pct<100 else "done", pct, voice_id=pid)
-                # tenta ckpt real — se gpt-sovits não instalado, deixa como done mas sem ckpt (engine dará fallback)
+                # treino GPT-SoVITS real requer o repo clonado (não pip); senão falha limpa
+                if _gpt_sovits_repo() is None:
+                    raise RuntimeError(
+                        "GPT-SoVITS não instalado — finetune requer: scripts/setup-gpt-sovits.sh "
+                        "(clona repo + modelos ~2GB). Use xtts_v2 ou f5_tts por enquanto."
+                    )
                 ckpt_dir = MODELS_DIR / "gpt_sovits" / pid
                 ckpt_dir.mkdir(parents=True, exist_ok=True)
-                # stub ckpt marker
-                (ckpt_dir / "ckpt.pth").write_text("stub - gpt-sovits not installed; finetune requires pip install gpt-sovits")
+                _ret = _run_gpt_sovits_train(pid, str(ref), ckpt_dir, job_id)
                 with _Session() as s2:
                     o = s2.get(VoiceProfile, pid)
                     if o:
                         o.finetune_status = "done"
-                        o.finetune_model_path = str(ckpt_dir / "ckpt.pth")
+                        o.finetune_model_path = str(_ret)
                         s2.commit()
                 report(job_id, "done", 100, voice_id=pid)
             except Exception as e:
