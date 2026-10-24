@@ -21,10 +21,11 @@ VENV="$DEST/.venv"
 if [ ! -x "$VENV/bin/python" ]; then
   echo "==> criando venv dedicado GPT-SoVITS"
   uv venv --python 3.11 "$VENV"
-  echo "==> instalando requirements (torch CUDA + deps)"
-  uv pip install --python "$VENV/bin/python" torch==2.5.1 torchaudio==2.5.1 \
-    --index-url https://download.pytorch.org/whl/cu124 2>&1 | tail -3
+  echo "==> instalando requirements (torch>=2.6 + deps)"
+  uv pip install --python "$VENV/bin/python" "torch>=2.6" "torchaudio>=2.6" 2>&1 | tail -3
   (cd "$DEST" && uv pip install --python "$VENV/bin/python" -r requirements.txt 2>&1 | tail -5)
+  # deps descobertas na verificação de inferência/treino
+  uv pip install --python "$VENV/bin/python" torchcodec resampy faster-whisper 2>&1 | tail -3
 fi
 
 PRET="$DEST/GPT_SoVITS/pretrained_models"

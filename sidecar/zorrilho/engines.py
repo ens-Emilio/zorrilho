@@ -122,38 +122,39 @@ class GptSovitsEngine:
         sovits = Path(ref_audio)
         if not sovits.is_file():
             raise RuntimeError(f"ckpt SoVITS inválido: {ref_audio}")
-        # GPT ckpt: procura .ckpt/.pth irmão que NÃO seja o SoVITS (G_/eN.ckpt)
-        gpt = next(
-            (p for p in sorted(sovits.parent.glob("*.ckpt")) if "s1" not in p.name.lower()),
-            None,
-        )
+        gpt = next((p for p in sorted(sovits.parent.glob("*.ckpt"))
+                    if "s1" not in p.name.lower()), None)
+        ref_wav = next(iter(sorted(sovits.parent.glob("ref*.wav"))), None)
         if gpt is None:
-            gpt = next((p for p in sorted(sovits.parent.glob("G_*.pth"))), None)
-        if gpt is None:
-            raise RuntimeError(
-                f"ckpt GPT não encontrado ao lado de {sovits.name} (esperado G_*.pth ou *.ckpt)"
-            )
+            raise RuntimeError(f"ckpt GPT (.ckpt com config+weight) não encontrado ao lado de {sovits.name}")
+        if ref_wav is None:
+            raise RuntimeError(f"wav de referência (ref*.wav) não encontrado ao lado de {sovits.name}")
 
         py = str(next((p for p in repo.rglob("bin/python") if p.exists()), "python"))
         t0 = time.monotonic()
         with tempfile.TemporaryDirectory() as td:
             ref_txt = Path(td) / "ref.txt"
             src_txt = Path(td) / "src.txt"
-            ref_txt.write_text(os.path.splitext(Path(ref_audio).name)[0], encoding="utf-8")
+            ref_txt.write_text(os.path.splitext(Path(ref_wav).stem)[0], encoding="utf-8")
             src_txt.write_text(text, encoding="utf-8")
+            lang_map = {"en": "英文", "zh": "中文", "ja": "日文"}
+            lang_cli = lang_map.get(language, "英文")
             cmd = [
                 py, "-s", str(repo / "GPT_SoVITS" / "inference_cli.py"),
                 "--gpt_model", str(gpt),
                 "--sovits_model", str(sovits),
-                "--ref_audio", ref_audio,
+                "--ref_audio", str(ref_wav),
                 "--ref_text", str(ref_txt),
-                "--ref_language", language,
+                "--ref_language", lang_cli,
                 "--target_text", str(src_txt),
-                "--target_language", language,
+                "--target_language", lang_cli,
                 "--output_path", td,
             ]
+            env = {**os.environ,
+                   "PYTHONPATH": str(repo / "GPT_SoVITS") + os.pathsep + str(repo)
+                   + os.pathsep + os.environ.get("PYTHONPATH", "")}
             proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  cwd=str(repo), timeout=600)
+                                  cwd=str(repo), env=env, timeout=600)
             if proc.returncode != 0:
                 raise RuntimeError(f"gpt_sovits infer falhou: {proc.stderr.strip()[-400:]}")
             generated = Path(td) / "output.wav"

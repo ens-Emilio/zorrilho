@@ -744,11 +744,25 @@ def _run_gpt_sovits_train(pid: str, ref_clean: str, ckpt_dir: Path, job_id: str,
     clips = sorted(clips_dir.glob("clip_*.wav"))
     if not clips:
         raise RuntimeError("falha ao fatiar áudio de referência (sem clips)")
+    # transcreve cada clip com faster-whisper (texto real casa com áudio → passa filtro ps_ratio)
+    # ponytail: o modelo é carregado 1x (global) p/ não re-carregar por clip
+    def _transcribe(wavp: Path, _wm=[None]) -> str:
+        try:
+            if _venv_py := None: pass
+            from faster_whisper import WhisperModel
+            if _venv_py is None:
+                _venv_py = WhisperModel("small", device="cpu", compute_type="int8")
+            segs, _ = _venv_py.transcribe(str(wavp), language=language, beam_size=1)
+            return " ".join(s.text.strip() for s in segs).strip()
+        except Exception as e:
+            print(f"[zorrilho] whisper falhou em {wavp.name}: {e}", flush=True)
+            return ""
     listf = exp_dir / "train.list"
-    listf.write_text(
-        "".join(f"{c}|{pid}|{language}|{c.stem}\n" for c in clips),
-        encoding="utf-8",
-    )
+    rows = []
+    for c in clips:
+        txt = _transcribe(c) or c.stem
+        rows.append(f"{c}|{pid}|{language}|{txt}")
+    listf.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     chore = str(repo / "GPT_SoVITS")
     env_base = {**os.environ,
@@ -804,23 +818,40 @@ def _run_gpt_sovits_train(pid: str, ref_clean: str, ckpt_dir: Path, job_id: str,
     s2cfg = _json.loads((repo / "GPT_SoVITS/configs/s2.json").read_text())
     s2cfg["data"].update({"exp_dir": str(exp_dir), "training_files": str(exp_dir / "2-name2text.txt"),
                           "validation_files": str(exp_dir / "2-name2text.txt")})
-    s2cfg["data"]["pretrained_s2G"] = str(s2g)
-    s2cfg["data"]["pretrained_s2D"] = str(s2d)
-    s2cfg["train"].update({"batch_size": 2, "epochs": 2})
+    s2cfg["train"].update({
+        "batch_size": 2, "epochs": 2, "gpu_numbers": "0", "save_every_epoch": 1,
+        "if_save_every_weights": True, "if_save_latest": True,
+        "pretrained_s2G": str(s2g), "pretrained_s2D": str(s2d),
+    })
+    s2cfg["model"]["version"] = "v2"
+    s2cfg["name"] = exp_name
     s2cfg["s2_ckpt_dir"] = str(exp_dir / "logs_s2_v2")
     s2tmp = exp_dir / "tmp_s2.json"
     s2tmp.write_text(_json.dumps(s2cfg, indent=2), encoding="utf-8")
     report(job_id, "train_s2", 80, voice_id=pid)
     r2 = subprocess.run([py, "-s", str(repo / "GPT_SoVITS/s2_train.py"), "--config", str(s2tmp)],
                         capture_output=True, text=True, cwd=chore, env=env_base, timeout=7200)
-    if r2.returncode != 0:
+    # s2 pode sair != 0 só no log final após já salvar G_*.pth; aceita ckpt existente
+    _existing = sorted((exp_dir).rglob("G_*.pth"))
+    if r2.returncode != 0 and not _existing:
         raise RuntimeError(f"train_s2 falhou (rc={r2.returncode}): {r2.stderr.strip()[-400:]}")
 
-    ckpts = sorted(list((exp_dir).rglob("G_*.pth")) + list((exp_dir).rglob("*.ckpt")))
-    if not ckpts:
-        raise RuntimeError("GPT-SoVITS: pipeline terminou sem gerar ckpt")
+    sovits = sorted((exp_dir).rglob("G_*.pth"))
+    if not sovits:
+        raise RuntimeError("GPT-SoVITS: pipeline terminou sem gerar ckpt SoVITS (G_*.pth)")
+    sovits_ckpt = sovits[-1]
+    # copia GPT ckpt (formato config+weight) e um ref curto (3-10s) ao lado p/ o engine inferir
+    if ckpt_dir.exists():
+        for c in ckpt_dir.glob("*-e*.ckpt"):
+            if "s1" not in c.name.lower():
+                shutil.copy2(c, sovits_ckpt.parent / "gpt.ckpt")
+                break
+    import subprocess as _sp
+    ref_short = sovits_ckpt.parent / "ref.wav"
+    _sp.run(["ffmpeg", "-y", "-v", "error", "-i", ref_clean, "-t", "8",
+             "-ar", "32000", "-ac", "1", str(ref_short)], check=False, capture_output=True, timeout=60)
     report(job_id, "training", 95, voice_id=pid)
-    return ckpts[-1]
+    return sovits_ckpt
 
 
 _finetune_jobs: dict[str, dict] = {}
